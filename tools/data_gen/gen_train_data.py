@@ -6,6 +6,12 @@ import numpy as np
 import argparse
 from tree_learn.util import SampleGenerator, get_root_logger, get_config, voxelize, compute_features, load_data
 
+try:
+    import lazrs
+    _LAZRS_ERROR = (lazrs.LazrsError, OSError)
+except ImportError:
+    _LAZRS_ERROR = (OSError,)
+
 INSTANCE_LABEL_IGNORE_IN_RAW_DATA = -1 # instance label in raw data to ignore during crop generation since it represent unlabeled data
 N_JOBS = 10 # number of threads for feature calculations
 
@@ -36,7 +42,11 @@ def generate_random_crops(cfg):
         save_path_voxelized = osp.join(voxelized_dir, f'{plot_name}.npz')
         if osp.exists(save_path_voxelized):
             continue
-        data = load_data(osp.join(forests_dir, plot_file))
+        try:
+            data = load_data(osp.join(forests_dir, plot_file))
+        except _LAZRS_ERROR as e:
+            logger.error('Skipping corrupted/incomplete LAZ file: %s - %s', osp.join(forests_dir, plot_file), e)
+            continue
         data, _ = voxelize(data, cfg.sample_generation.voxel_size)
         data = np.round(data, 2)
         data = data.astype(np.float32)

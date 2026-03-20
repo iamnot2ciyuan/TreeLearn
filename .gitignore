@@ -60,6 +60,9 @@ work_dirs
 data
 *.tsv
 *.npy
+*.laz
+*.npz
 *.zip
 *.pth
+*.pth.tar
 *.pt

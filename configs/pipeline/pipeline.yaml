@@ -7,8 +7,8 @@ model:
   spatial_shape: [500, 500, 1000] # just a technicality, leave unchanged to avoid zero size error. Does not have actual impact on prediction.
 
 ############ non-default args
-forest_path: 'data/pipeline/L1W/forest/L1W.laz' # path to forest point cloud to be segmented (las, npy, npz or txt)
-pretrain: 'data/model_weights/model_weights_20241213.pth' # path to trained network parameters for offset and semantic prediction
+forest_path: 'data/benchmark/L1W_voxelized01_for_eval.laz' # path to forest point cloud to be segmented (las, npy, npz or txt)
+pretrain: 'data/model_weights/epoch_1000.pth' # path to trained network parameters for offset and semantic prediction
 fp16: True # using half precision for network prediction
 tile_generation: True # whether to generate tiles for the forest point cloud to be segmented. If you re-run the pipeline multiple times for the same point cloud, this can be set to False after the first time.
 

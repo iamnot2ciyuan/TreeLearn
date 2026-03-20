@@ -114,14 +114,10 @@ def run_treelearn_pipeline(config, config_path=None):
             hull_buffer_large.to_pickle(os.path.join(pointwise_dir, 'hull_buffer_large.pkl'))
         np.savez_compressed(os.path.join(pointwise_dir, 'pointwise_results.npz'), **pointwise_results)
         
-        # offset-shifted coordinates filtered by verticality and offset (initial clustering results); save as laz file for visualization
-        verticality = input_feats[:, -1]
-        verticality_mask = verticality >= config.grouping.tau_vert
-        offset_mask = np.abs(offset_predictions[:, 2]) <= config.grouping.tau_off
+        # offset-shifted coordinates for initial clustering results (no handcrafted geometric priors; only tree predictions)
         sem_mask = instance_preds != NON_TREES_LABEL_IN_GROUPING
-        mask = verticality_mask & offset_mask & sem_mask
-        cluster_coords = coords[mask] + offset_predictions[mask]
-        cluster_coords = np.hstack([cluster_coords, instance_preds[mask].reshape(-1, 1)])
+        cluster_coords = coords[sem_mask] + offset_predictions[sem_mask]
+        cluster_coords = np.hstack([cluster_coords, instance_preds[sem_mask].reshape(-1, 1)])
         save_data(cluster_coords, 'laz', 'cluster_coords_initial', pointwise_dir)
         
         # complete offset-shifted coordinates with instance predictions (clustering results after assigning remaining points); save as laz file for visualization

@@ -146,12 +146,10 @@ def get_instances(coords, offset, semantic_prediction_logits, grouping_cfg, vert
     cluster_coords = coords + offset
     cluster_coords = cluster_coords[:, :3]
 
-    # get tree coords whose offset magnitude and verticality feature is appropriate
+    # get tree coords based purely on semantic confidence (no handcrafted geometric priors)
     semantic_prediction_probs = torch.from_numpy(semantic_prediction_logits).float().softmax(dim=-1)
     tree_mask = semantic_prediction_probs[:, tree_class_in_dataset] >= grouping_cfg.tree_conf_thresh
-    vertical_mask = verticality_feat > grouping_cfg.tau_vert
-    offset_mask = np.abs(offset[:, 2]) < grouping_cfg.tau_off
-    mask_cluster = tree_mask.numpy() & vertical_mask & offset_mask
+    mask_cluster = tree_mask.numpy()
     ind_cluster = np.where(mask_cluster)[0]
     cluster_coords_filtered = cluster_coords[ind_cluster]
     cluster_coords_filtered = cluster_coords_filtered[:, :2]
