@@ -1,5 +1,5 @@
 paths:
-  pred_forest_path: 'data/pipeline/L1W/results/full_forest/L1W.laz' # path to predicted forest point cloud
+  pred_forest_path: 'data/results/full_forest/L1W_voxelized01_for_eval.laz' # path to predicted forest point cloud
   gt_forest_path: 'data/benchmark/L1W_voxelized01_for_eval.laz' # path to ground truth forest point cloud
 
 thresholds:

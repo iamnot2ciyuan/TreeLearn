@@ -92,7 +92,12 @@ def evaluate(config, config_path=None):
     completeness = len(matched_gts) / (len(matched_gts) + len(non_matched_gts))
     omission_error_rate = 1 - completeness
     commission_error_rate = len(non_matched_preds_filtered) / (len(matched_preds) + len(non_matched_preds_filtered))
-    f1_score = 2 * ((1 - commission_error_rate) * (1 - omission_error_rate)) / (2 - (commission_error_rate + omission_error_rate))
+    # Keep f1 computation in [0, 1] space, then convert to percent.
+    denominator = 2 - (commission_error_rate + omission_error_rate)
+    if denominator == 0:
+        f1_score = 0.0
+    else:
+        f1_score = 2 * ((1 - commission_error_rate) * (1 - omission_error_rate)) / denominator
     completeness = np.round(completeness * 100, 1)
     omission_error_rate = np.round(omission_error_rate * 100, 1)
     commission_error_rate = np.round(commission_error_rate * 100, 1)

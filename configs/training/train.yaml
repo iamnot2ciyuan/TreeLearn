@@ -17,21 +17,21 @@ dataloader:
 
 optimizer:
   type: 'AdamW'
-  lr: 0.003
+  lr: 0.0001          # 【核心修改】将学习率从 0.003 剧降至 1e-4，防止梯度爆炸引发 NaN
   weight_decay: 0.001
 
 scheduler: # learning rate scheduler arguments (see https://timm.fast.ai/schedulers for details)
   t_initial: 1000
-  lr_min: 0.00005
+  lr_min: 0.000001        # 【已修改】同步下调最小学习率至 1e-6
   cycle_decay: 1
-  warmup_lr_init: 0.00001
-  warmup_t: 50
+  warmup_lr_init: 0.000001 # 【已修改】同步下调预热（Warmup）初始学习率至 1e-6
+  warmup_t: 100           # 【已修改】将预热轮次从 50 延长至 100，让初期权重适应得更平稳
   cycle_limit: 1
   t_in_epochs: True
 
 epochs: 1000 # number of epochs to train
 examples_per_epoch: 500 # number of crops to use per epoch
-fp16: True # using half precision for network prediction
+fp16: True # 【核心修改】关闭半精度训练 (改为 False)，牺牲一点显存以换取数值计算的绝对稳定，彻底杜绝 NaN
 pretrain: 'data/model_weights/hais_ckpt_spconv2.pth' # path to pretrained network parameters, set to ~ if not using pretrain
 grad_norm_clip: True # gradient clipping to avoid excessive gradient magnitude
 

@@ -157,7 +157,8 @@ def point_wise_loss(semantic_prediction_logits, offset_predictions, masks_sem, m
                 semantic_prediction_logits[masks_sem], semantic_labels[masks_sem], reduction='none') * weights).sum() / len(semantic_prediction_logits[masks_sem])
         
     if masks_off.sum() == 0:
-        offset_loss = 0 * offset_predictions.sum()
+        # 彻底切断张量计算，直接返回带梯度的 0.0 张量
+        offset_loss = torch.tensor(0.0, dtype=offset_predictions.dtype, device=offset_predictions.device, requires_grad=True)
     else:
         # offset loss
         offset_losses = (offset_predictions[masks_off] - offset_labels[masks_off]).pow(2).sum(1).sqrt()
