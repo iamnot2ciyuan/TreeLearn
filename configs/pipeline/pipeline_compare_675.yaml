@@ -5,10 +5,10 @@ model:
   spatial_shape: [500, 500, 1000]
 
 ############ non-default args
-forest_path: 'data/benchmark/L1W_voxelized01_for_eval.laz' # .npz 已删；用原始 laz，运行时会再写出居中 .npz
-pretrain: 'data/model_weights/epoch_781.pth'
+forest_path: 'data/benchmark/L1W_voxelized01_for_eval.laz'
+pretrain: 'data/model_weights/epoch_675.pth'
 fp16: True
-tile_generation: True # 保持 True，让它重新切
+tile_generation: True
 
 dataloader:
   batch_size: 1
@@ -16,7 +16,7 @@ dataloader:
 
 shape_cfg:
   outer_remove: ~
-  alpha: 0.6 # 与原作者推荐一致，更适合非凸边界
+  alpha: 0
   buffer_size_to_determine_edge_trees: 0.3
 
 save_cfg:
@@ -24,4 +24,4 @@ save_cfg:
   save_treewise: True
   save_pointwise: True
   return_type: 'original'
-  results_dir: 'results'
+  results_dir: 'results_epoch675'

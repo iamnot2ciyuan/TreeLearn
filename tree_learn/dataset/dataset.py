@@ -38,7 +38,12 @@ class TreeDataset(Dataset):
         
         # get entries
         xyz = data['points']
-        input_feat = data['feat']
+        input_feat = data['feat'] if 'feat' in data else np.ones((len(xyz), 1), dtype=np.float32)
+        colors = data['colors'] if 'colors' in data else np.zeros((len(xyz), 3), dtype=np.float32)
+        if input_feat.ndim == 1:
+            input_feat = input_feat[:, np.newaxis]
+        if colors.ndim == 1:
+            colors = colors[:, np.newaxis]
 
         instance_label = data['instance_label']
         semantic_label = np.empty(len(instance_label))
@@ -71,9 +76,10 @@ class TreeDataset(Dataset):
         mask_sem = torch.from_numpy(mask_sem)
         pt_offset_label = torch.from_numpy(pt_offset_label)
         input_feat = torch.from_numpy(input_feat)
+        colors = torch.from_numpy(colors)
         center = torch.from_numpy(center)
 
-        return xyz, input_feat, instance_label, semantic_label, pt_offset_label, center, mask_inner, mask_off, mask_sem
+        return xyz, input_feat, colors, instance_label, semantic_label, pt_offset_label, center, mask_inner, mask_off, mask_sem
 
 
     def get_mask_not_ignore(self, instance_label):
@@ -167,6 +173,7 @@ class TreeDataset(Dataset):
     def collate_fn(self, batch):
         xyzs = []
         input_feats = []
+        colors = []
         batch_ids = []
         instance_labels = []
         semantic_labels = []
@@ -181,11 +188,12 @@ class TreeDataset(Dataset):
 
 
         for data in batch:
-            xyz, input_feat, instance_label, semantic_label, pt_offset_label, center, mask_inner, mask_off, mask_sem = data
+            xyz, input_feat, color, instance_label, semantic_label, pt_offset_label, center, mask_inner, mask_off, mask_sem = data
             total_points_num += len(xyz)
 
             xyzs.append(xyz)
             input_feats.append(input_feat)
+            colors.append(color)
             batch_ids.append(torch.ones(len(xyz))*batch_id)
             semantic_labels.append(semantic_label)
             instance_labels.append(instance_label)
@@ -202,6 +210,7 @@ class TreeDataset(Dataset):
 
         xyzs = torch.cat(xyzs, 0).to(torch.float32)
         input_feats = torch.cat(input_feats, 0).to(torch.float32)
+        colors = torch.cat(colors, 0).to(torch.float32)
         batch_ids = torch.cat(batch_ids, 0).long()
         semantic_labels = torch.cat(semantic_labels, 0).long()
         instance_labels = torch.cat(instance_labels, 0).long()
@@ -214,6 +223,7 @@ class TreeDataset(Dataset):
         return {
             'coords': xyzs,
             'input_feats': input_feats,
+            'colors': colors,
             'batch_ids': batch_ids,
             'semantic_labels': semantic_labels,
             'instance_labels': instance_labels,

@@ -12,25 +12,89 @@ INSTANCE_LABEL_IGNORE_IN_RAW_DATA = -1 # label for unlabeled in raw data
 NON_TREE_CLASS_IN_RAW_DATA = 0 # label for non-trees in raw data
 
 
+def normalize_colors(colors):
+    colors = colors.astype(np.float32)
+    if colors.size == 0:
+        return colors
+    max_value = np.nanmax(colors)
+    if max_value > 255:
+        colors = colors / 65535.0
+    elif max_value > 1:
+        colors = colors / 255.0
+    return np.clip(colors, 0.0, 1.0)
+
+
+def looks_like_instance_labels(values):
+    values = np.asarray(values)
+    return np.allclose(values, np.round(values)) and np.nanmin(values) >= INSTANCE_LABEL_IGNORE_IN_RAW_DATA
+
+
+def format_loaded_point_cloud(data):
+    data = np.asarray(data)
+    if data.ndim != 2:
+        raise ValueError(f'Expected point cloud array with 2 dimensions, got shape {data.shape}.')
+
+    if data.shape[1] == 3:
+        labels = INSTANCE_LABEL_IGNORE_IN_RAW_DATA * np.ones((len(data), 1), dtype=data.dtype)
+        data = np.hstack([data, labels])
+    elif data.shape[1] == 4:
+        pass
+    elif data.shape[1] == 6:
+        labels = INSTANCE_LABEL_IGNORE_IN_RAW_DATA * np.ones((len(data), 1), dtype=data.dtype)
+        colors = normalize_colors(data[:, 3:6])
+        data = np.hstack([data[:, :3], labels, colors])
+    elif data.shape[1] == 7:
+        # Prefer the repo's internal convention [x, y, z, label, r, g, b].
+        # Seven-column raw files are ambiguous, so only fall back to RGB-first
+        # when the fourth column clearly is not an instance-label column.
+        if looks_like_instance_labels(data[:, 3]):
+            labels = data[:, 3:4]
+            colors = normalize_colors(data[:, 4:7])
+        elif looks_like_instance_labels(data[:, 6]):
+            colors = normalize_colors(data[:, 3:6])
+            labels = data[:, 6:7]
+        else:
+            raise ValueError('Could not infer label column for 7-column point cloud data.')
+        data = np.hstack([data[:, :3], labels, colors])
+    else:
+        raise ValueError(f'Unsupported point cloud shape {data.shape}. Expected 3, 4, 6 or 7 columns.')
+    return data
+
+
 # load point cloud data from .npy, .npz, .las, .laz or .txt file. Las files are expected to have treeID and classification attributes according to the For-Instance labeling convention (https://zenodo.org/records/8287792)
 # other file formats will just be loaded with the labels as they are. In this case -1 is used for unlabeled points and 0 for non-tree points. Trees should be labeled with integers > 0
 def load_data(path):
     assert path.endswith('npy') or path.endswith('npz') or path.endswith('las') or path.endswith('laz') or path.endswith('txt')
     if path.endswith('npy'):
-        data = np.load(path)
+        data = format_loaded_point_cloud(np.load(path))
     elif path.endswith('npz'):
         data = np.load(path)
         assert 'points' in data
-        if 'points' in data and 'labels' not in data:
-            data = data['points']
+        points = data['points']
+        labels = None
+        if 'labels' in data:
+            labels = data['labels']
+        elif 'instance_label' in data:
+            labels = data['instance_label']
+        colors = data['colors'] if 'colors' in data else None
+
+        if labels is None:
+            labels = INSTANCE_LABEL_IGNORE_IN_RAW_DATA * np.ones(len(points), dtype=points.dtype)
+        labels = labels[:, np.newaxis]
+        if colors is not None:
+            data = np.hstack([points, labels, normalize_colors(colors)])
         else:
-            data = np.hstack((data["points"], data["labels"][:,np.newaxis]))
+            data = np.hstack([points, labels])
     elif path.endswith('.las') or path.endswith('.laz'):
         las_file = laspy.read(path)
         x = las_file.X * las_file.header.scales[0] + las_file.header.offsets[0]
         y = las_file.Y * las_file.header.scales[1] + las_file.header.offsets[1]
         z = las_file.Z * las_file.header.scales[2] + las_file.header.offsets[2]
         points = np.vstack((x, y, z)).T
+        if hasattr(las_file, 'red') and hasattr(las_file, 'green') and hasattr(las_file, 'blue'):
+            colors = normalize_colors(np.vstack((las_file.red, las_file.green, las_file.blue)).T)
+        else:
+            colors = None
         if hasattr(las_file, 'treeID') and hasattr(las_file, 'classification'):
             treeID = np.array(las_file.treeID)
             classes = np.array(las_file.classification)
@@ -47,12 +111,13 @@ def load_data(path):
             data = np.hstack([points, labels[:,np.newaxis]])
         else:
             data = points
+        if colors is not None:
+            data = np.hstack([format_loaded_point_cloud(data), colors])
+        else:
+            data = format_loaded_point_cloud(data)
     elif path.endswith('txt'):
-        data = pd.read_csv(path, delimiter=' ').to_numpy()
-    
-    assert data.shape[1] == 3 or data.shape[1] == 4
-    if data.shape[1] == 3:
-        data = np.hstack([data, INSTANCE_LABEL_IGNORE_IN_RAW_DATA * np.ones(len(data))[:,np.newaxis]])
+        data = format_loaded_point_cloud(pd.read_csv(path, delimiter=' ').to_numpy())
+
     return data
 
 
@@ -110,10 +175,14 @@ class SampleGenerator:
     def __init__(self, plot_path, features_path, save_dir, n_neigh_sor, 
             multiplier_sor, rad, npoints_rad):
 
-        data = np.load(plot_path)
-        data = np.hstack((data["points"], data["labels"][:,np.newaxis]))
+        plot_data = np.load(plot_path)
+        data = np.hstack((plot_data["points"], plot_data["labels"][:,np.newaxis]))
         self.feats = np.load(features_path)
         self.feats = self.feats['features']
+        self.colors = plot_data["colors"] if "colors" in plot_data else np.zeros((len(plot_data["points"]), 3), dtype=np.float32)
+        self.colors = normalize_colors(self.colors).astype(np.float32)
+        self.feat_dim = self.feats.shape[1]
+        self.color_dim = self.colors.shape[1]
         self.plot_name = os.path.basename(plot_path)[:-4]
         self.points = data[:, :3]
         self.label = data[:, 3]
@@ -234,7 +303,7 @@ class SampleGenerator:
     def save(self, compressed=False):
         # get points
         points = np.hstack((self.points, self.label.reshape(-1, 1)))
-        points = np.hstack([points, self.feats])
+        points = np.hstack([points, self.feats, self.colors])
 
         # filter valid candidates
         vertices = self.vertices[self.filter]
@@ -305,12 +374,14 @@ class SampleGenerator:
                 # data
                 points_save = A_subset[:, :3]
                 instance_label_save = A_subset[:, 3]
-                feat_save = A_subset[:, 4:]
+                feat_save = A_subset[:, 4:4 + self.feat_dim]
+                colors_save = A_subset[:, 4 + self.feat_dim:4 + self.feat_dim + self.color_dim]
                 center = np.array([center[0], center[1], 0])
 
                 data = dict()
                 data['points'] = points_save
                 data['feat'] = feat_save
+                data['colors'] = colors_save
                 data['instance_label'] = instance_label_save.astype(np.int32)
                 data['center'] = center
                 
@@ -387,7 +458,7 @@ class SampleGenerator:
 
         # add label and feats to points
         points = np.hstack((self.points, self.label.reshape(-1, 1)))
-        points = np.hstack([points, self.feats])
+        points = np.hstack([points, self.feats, self.colors])
 
         # to cuda for faster performance
         points = torch.from_numpy(points).cuda()
@@ -435,7 +506,7 @@ class SampleGenerator:
         for i in range(len(valid_chunks)):
             chunk_center_x = np.round((valid_inner_square_extension[i][0] + valid_inner_square_extension[i][1]) / 2, 6)
             chunk_center_y = np.round((valid_inner_square_extension[i][2] + valid_inner_square_extension[i][3]) / 2, 6)
-            center = np.concatenate([np.array([chunk_center_x, chunk_center_y, 0, 0]), np.zeros(self.feats.shape[1])]).reshape(1, -1)
+            center = np.concatenate([np.array([chunk_center_x, chunk_center_y, 0, 0]), np.zeros(self.feat_dim + self.color_dim)]).reshape(1, -1)
             valid_chunks[i] = (torch.from_numpy(valid_chunks[i]).cuda() - torch.from_numpy(center).cuda()).cpu().numpy()
 
 
@@ -468,7 +539,8 @@ class SampleGenerator:
             # data
             points = valid_chunk[:, :3]
             instance_label = valid_chunk[:, 3]
-            feat = valid_chunk[:, 4:]
+            feat = valid_chunk[:, 4:4 + self.feat_dim]
+            colors = valid_chunk[:, 4 + self.feat_dim:4 + self.feat_dim + self.color_dim]
             chunk_center_x = np.round((valid_inner_square_extension[i][0] + valid_inner_square_extension[i][1]) / 2, 6)
             chunk_center_y = np.round((valid_inner_square_extension[i][2] + valid_inner_square_extension[i][3]) / 2, 6)
             center = np.array([chunk_center_x, chunk_center_y, 0])
@@ -476,6 +548,7 @@ class SampleGenerator:
             data = dict()
             data['points'] = points
             data['feat'] = feat
+            data['colors'] = colors
             data['instance_label'] = instance_label.astype(np.int32)
             data['center'] = center
             

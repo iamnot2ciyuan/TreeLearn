@@ -18,7 +18,7 @@ def evaluate(config, config_path=None):
 
     logger = get_root_logger(os.path.join(documentation_dir, 'evaluate_log.txt'))
     if config_path is not None:
-        shutil.copy(args.config, os.path.join(documentation_dir, os.path.basename(args.config)))
+        shutil.copy(config_path, os.path.join(documentation_dir, os.path.basename(config_path)))
 
     ################################## LOAD GROUND TRUTH
     # get coords and labels
@@ -89,9 +89,17 @@ def evaluate(config, config_path=None):
     non_matched_gts_corresponding_pred = np.array([mapping_to_original_pred_nums[label] if not np.isnan(label) else np.nan for label in non_matched_gts_corresponding_pred])
     
     # calculate aggregated detection metrics
-    completeness = len(matched_gts) / (len(matched_gts) + len(non_matched_gts))
+    gt_denominator = len(matched_gts) + len(non_matched_gts)
+    if gt_denominator == 0:
+        completeness = 0.0
+    else:
+        completeness = len(matched_gts) / gt_denominator
     omission_error_rate = 1 - completeness
-    commission_error_rate = len(non_matched_preds_filtered) / (len(matched_preds) + len(non_matched_preds_filtered))
+    pred_denominator = len(matched_preds) + len(non_matched_preds_filtered)
+    if pred_denominator == 0:
+        commission_error_rate = 0.0
+    else:
+        commission_error_rate = len(non_matched_preds_filtered) / pred_denominator
     # Keep f1 computation in [0, 1] space, then convert to percent.
     denominator = 2 - (commission_error_rate + omission_error_rate)
     if denominator == 0:

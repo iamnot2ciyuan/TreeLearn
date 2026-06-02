@@ -16,6 +16,22 @@ INSTANCE_LABEL_IGNORE_IN_RAW_DATA = -1 # instance label in raw data to ignore du
 N_JOBS = 10 # number of threads for feature calculations
 
 
+def has_aligned_colors(npz_path):
+    if not osp.exists(npz_path):
+        return False
+    try:
+        data = np.load(npz_path)
+        return (
+            'points' in data
+            and 'colors' in data
+            and data['colors'].ndim == 2
+            and data['colors'].shape[1] == 3
+            and len(data['colors']) == len(data['points'])
+        )
+    except Exception:
+        return False
+
+
 
 
 def generate_random_crops(cfg):
@@ -40,8 +56,10 @@ def generate_random_crops(cfg):
     for plot_file in tqdm(os.listdir(forests_dir)):
         plot_name = plot_file[:-4]
         save_path_voxelized = osp.join(voxelized_dir, f'{plot_name}.npz')
-        if osp.exists(save_path_voxelized):
+        if has_aligned_colors(save_path_voxelized):
             continue
+        if osp.exists(save_path_voxelized):
+            logger.info('Regenerating %s because it is missing aligned RGB colors.', save_path_voxelized)
         try:
             data = load_data(osp.join(forests_dir, plot_file))
         except _LAZRS_ERROR as e:
@@ -50,7 +68,8 @@ def generate_random_crops(cfg):
         data, _ = voxelize(data, cfg.sample_generation.voxel_size)
         data = np.round(data, 2)
         data = data.astype(np.float32)
-        np.savez_compressed(save_path_voxelized, points=data[:, :3], labels=data[:, 3])
+        colors = data[:, 4:7] if data.shape[1] >= 7 else np.zeros((len(data), 3), dtype=np.float32)
+        np.savez_compressed(save_path_voxelized, points=data[:, :3], labels=data[:, 3], colors=colors)
     
     # calculate features
     logger.info('calculating features...')

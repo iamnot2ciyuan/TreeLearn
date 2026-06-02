@@ -1,0 +1,12 @@
+paths:
+  pred_forest_path: 'data/results_epoch675/full_forest/L1W_voxelized01_for_eval.laz'
+  gt_forest_path: 'data/benchmark/L1W_voxelized01_for_eval.laz'
+
+thresholds:
+  min_iou_for_match: 0.5
+  min_precision_for_pred: 0.5
+  min_recall_for_gt: 0.5
+
+partitions:
+  xy_partition: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
+  z_partition: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
