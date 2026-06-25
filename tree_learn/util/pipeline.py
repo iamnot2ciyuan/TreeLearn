@@ -13,10 +13,36 @@ from shapely.geometry import Point, Polygon
 from sklearn.neighbors import NearestNeighbors, KNeighborsClassifier
 from scipy import stats
 from sklearn.cluster import DBSCAN, HDBSCAN
-from tree_learn.util.data_preparation import voxelize, compute_features, load_data, SampleGenerator
+from tree_learn.util.data_preparation import voxelize, compute_features, load_data, normalize_colors, SampleGenerator
 
 
 N_JOBS = 10 # number of threads/processes to use for several functions that have multiprocessing/multithreading enabled
+
+
+def _has_aligned_colors(npz_path):
+    if not osp.exists(npz_path):
+        return False
+    try:
+        with np.load(npz_path) as data:
+            return (
+                'points' in data
+                and 'colors' in data
+                and data['colors'].ndim == 2
+                and data['colors'].shape[1] == 3
+                and len(data['colors']) == len(data['points'])
+            )
+    except Exception:
+        return False
+
+
+def _has_valid_hash_mapping(hash_mapping_path):
+    if not osp.exists(hash_mapping_path):
+        return False
+    try:
+        with open(hash_mapping_path, 'rb') as f:
+            return isinstance(pickle.load(f), dict)
+    except Exception:
+        return False
 
 
 def _resolve_inference_config(config):
@@ -45,23 +71,40 @@ def generate_tiles(cfg, forest_path, logger, return_type='voxelized'):
     save_path_voxelized = osp.join(voxelized_dir, f'{plot_name}.npz')
     save_path_voxelized_original_idx = osp.join(voxelized_dir, f'{plot_name}_original_idx.pkl')
     save_path_hash_mapping = osp.join(voxelized_dir, f'{plot_name}_hash_mapping.pkl')
-    if (not osp.exists(save_path_voxelized)) or (return_type == 'original' and not osp.exists(save_path_voxelized_original_idx)):
+    needs_voxelized = (not osp.exists(save_path_voxelized)) or (not _has_aligned_colors(save_path_voxelized))
+    needs_original_idx = return_type == 'original' and not osp.exists(save_path_voxelized_original_idx)
+    needs_hash_mapping = return_type == 'original' and not _has_valid_hash_mapping(save_path_hash_mapping)
+    original_idx = None
+
+    if needs_voxelized or needs_original_idx:
         data = load_data(forest_path)
         data, original_idx = voxelize(data, cfg.voxel_size)
         data = data.astype(np.float32)
         data = np.round(data, 2)
-        np.savez_compressed(save_path_voxelized, points=data[:, :3], labels=data[:, 3])
+        colors = data[:, 4:7] if data.shape[1] >= 7 else np.zeros((len(data), 3), dtype=np.float32)
+        np.savez_compressed(
+            save_path_voxelized,
+            points=data[:, :3],
+            labels=data[:, 3],
+            colors=normalize_colors(colors)
+        )
 
         if return_type == 'original':
-            original_idx = [list(item) for item in original_idx]
-            # hash mapping
-            hash_values = get_hash_values(data[:, :3])
-            hash_mapping = get_hash_mapping(hash_values, original_idx)
+            original_idx = [np.asarray(item, dtype=np.int64).tolist() for item in original_idx]
             with open(save_path_voxelized_original_idx, 'wb') as f:
                 pickle.dump(original_idx, f)
-            with open(save_path_hash_mapping, 'wb') as f:
-                pickle.dump(hash_mapping, f)
-            del hash_values, original_idx, hash_mapping
+    elif return_type == 'original':
+        with open(save_path_voxelized_original_idx, 'rb') as f:
+            original_idx = pickle.load(f)
+
+    if return_type == 'original' and needs_hash_mapping:
+        data = load_data(save_path_voxelized)
+        hash_values = get_hash_values(data[:, :3])
+        hash_mapping = get_hash_mapping(hash_values, original_idx)
+        with open(save_path_hash_mapping, 'wb') as f:
+            pickle.dump(hash_mapping, f)
+        del hash_values, hash_mapping
+    del original_idx
             
     # calculating features
     logger.info('calculating features...')
@@ -156,15 +199,57 @@ def ensemble(coords, semantic_scores, semantic_labels, offset_predictions, offse
     return coords, semantic_scores, semantic_labels, offset_predictions, offset_labels, instance_labels, feats, input_feats
 
 
+def _cluster_tree_points(cluster_coords_xy, grouping_cfg, not_assigned_label_in_grouping, start_num_preds):
+    if len(cluster_coords_xy) == 0:
+        return None
+
+    if grouping_cfg.use_hdbscan:
+        pred_instances = group_hdbscan(
+            cluster_coords_xy,
+            grouping_cfg.tau_min,
+            not_assigned_label_in_grouping,
+            start_num_preds
+        )
+    else:
+        pred_instances = group_dbscan(
+            cluster_coords_xy,
+            grouping_cfg.tau_group,
+            grouping_cfg.tau_min,
+            not_assigned_label_in_grouping,
+            start_num_preds
+        )
+
+    if np.all(pred_instances == not_assigned_label_in_grouping):
+        return None
+    return pred_instances
+
+
 # get tree predictions for all points by using DBSCAN.
 def get_instances(coords, offset, semantic_prediction_logits, grouping_cfg, verticality_feat, tree_class_in_dataset, non_trees_label_in_grouping, not_assigned_label_in_grouping, start_num_preds):
     cluster_coords = coords + offset
     cluster_coords = cluster_coords[:, :3]
 
-    # get tree coords based purely on semantic confidence (no handcrafted geometric priors)
+    # Restore geometric seed filtering: semantic tree points are clustered only if they
+    # also satisfy the verticality and z-offset priors from the original pipeline.
     semantic_prediction_probs = torch.from_numpy(semantic_prediction_logits).float().softmax(dim=-1)
     tree_mask = semantic_prediction_probs[:, tree_class_in_dataset] >= grouping_cfg.tree_conf_thresh
-    mask_cluster = tree_mask.numpy()
+    tree_mask = tree_mask.numpy()
+
+    mask_cluster = tree_mask.copy()
+    used_geometric_filter = False
+    tau_vert = getattr(grouping_cfg, 'tau_vert', None)
+    if tau_vert is not None:
+        verticality_feat = np.asarray(verticality_feat).reshape(-1)
+        vertical_mask = verticality_feat > tau_vert
+        mask_cluster &= vertical_mask
+        used_geometric_filter = True
+
+    tau_off = getattr(grouping_cfg, 'tau_off', None)
+    if tau_off is not None:
+        offset_mask = np.abs(offset[:, 2]) < tau_off
+        mask_cluster &= offset_mask
+        used_geometric_filter = True
+
     ind_cluster = np.where(mask_cluster)[0]
     cluster_coords_filtered = cluster_coords[ind_cluster]
     cluster_coords_filtered = cluster_coords_filtered[:, :2]
@@ -173,11 +258,30 @@ def get_instances(coords, offset, semantic_prediction_logits, grouping_cfg, vert
     predictions = non_trees_label_in_grouping * np.ones(len(cluster_coords))
     predictions[tree_mask] = not_assigned_label_in_grouping
 
-    # get predicted instances
-    if grouping_cfg.use_hdbscan:
-        pred_instances = group_hdbscan(cluster_coords_filtered, grouping_cfg.tau_min, not_assigned_label_in_grouping, start_num_preds)
-    else:
-        pred_instances = group_dbscan(cluster_coords_filtered, grouping_cfg.tau_group, grouping_cfg.tau_min, not_assigned_label_in_grouping, start_num_preds)
+    pred_instances = _cluster_tree_points(
+        cluster_coords_filtered,
+        grouping_cfg,
+        not_assigned_label_in_grouping,
+        start_num_preds
+    )
+
+    # Mixed MLS/TLS/UAV setups can occasionally violate the handcrafted priors.
+    # Fall back to semantic-only clustering instead of crashing the pipeline with
+    # an empty/unassigned clustering result.
+    if pred_instances is None and used_geometric_filter and tree_mask.any():
+        ind_cluster = np.where(tree_mask)[0]
+        cluster_coords_filtered = cluster_coords[ind_cluster][:, :2]
+        pred_instances = _cluster_tree_points(
+            cluster_coords_filtered,
+            grouping_cfg,
+            not_assigned_label_in_grouping,
+            start_num_preds
+        )
+
+    if pred_instances is None:
+        predictions[tree_mask] = non_trees_label_in_grouping
+        return predictions.astype(np.int64)
+
     predictions[ind_cluster] = pred_instances 
     return predictions.astype(np.int64)
 

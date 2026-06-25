@@ -43,11 +43,14 @@ def run_treelearn_pipeline(config, config_path=None):
     xyz = data[:, :3].astype(np.float64)
     xyz_mean = np.mean(xyz, 0).astype(np.float64)
     xyz_centered = xyz - xyz_mean
+    labels = data[:, 3].astype(np.float32)
+    # Preserve labels/RGB so downstream tile generation stays aligned with the RGB-gated model.
+    colors = data[:, 4:7].astype(np.float32) if data.shape[1] >= 7 else np.zeros((len(data), 3), dtype=np.float32)
     # Always persist the centered point cloud as an .npz file.
     # This avoids the previous behavior where an input .npz would be converted to a
     # wrongly-named .npy file while still being written in NPZ (zip) format.
     config.forest_path = config.forest_path[:-4] + '.npz'
-    np.savez_compressed(config.forest_path, points=xyz_centered)
+    np.savez_compressed(config.forest_path, points=xyz_centered, labels=labels, colors=colors)
     
     # documentation
     logger = get_root_logger(os.path.join(documentation_dir, 'log_pipeline.txt'))
@@ -55,7 +58,7 @@ def run_treelearn_pipeline(config, config_path=None):
     tree_class_in_dataset = getattr(config.grouping, 'tree_class_in_dataset', TREE_CLASS_IN_PYTORCH_DATASET)
     logger.info(f'Using grouping.tree_class_in_dataset={tree_class_in_dataset}')
     if config_path is not None:
-        shutil.copy(args.config, os.path.join(documentation_dir, os.path.basename(args.config)))
+        shutil.copy(config_path, os.path.join(documentation_dir, os.path.basename(config_path)))
 
     # generate tiles used for inference and specify path to it in dataset config
     config.dataset_test.data_root = os.path.join(tiles_dir, 'npz')

@@ -29,6 +29,7 @@ def train(config, epoch, model, optimizer, scheduler, scaler, train_loader, logg
         
         scheduler.step(epoch)
         optimizer.zero_grad()
+        batch['current_epoch'] = epoch
         with torch.cuda.amp.autocast(enabled=config.fp16):
 
             # forward

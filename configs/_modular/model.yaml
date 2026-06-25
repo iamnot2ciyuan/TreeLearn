@@ -10,3 +10,12 @@ model:
   fixed_modules: [] # modules whose parameters are not updated during training
   spatial_shape: ~ # spatial shape of the tiles/crops (technical detail, not that important).
   voxel_size: 0.1 # determines the voxel size in m for generating the sparse voxel grid
+  use_geometry_constraint: True
+  use_boundary_push_constraint: True
+  boundary_push_weight: 0.1 # conservative default for mixed MLS/TLS/UAV fine-tuning
+  boundary_push_warmup_epochs: 5 # linearly ramps the boundary push term from epoch 1 to avoid disrupting pretrained offsets
+  boundary_push_xy_radius: 0.6 # only nearby cross-tree points within this xy radius are treated as boundary competitors
+  boundary_push_z_radius: 2.0 # avoid pushing apart vertically distant points that are unlikely to compete in the same crown boundary
+  boundary_push_margin: 0.3 # target minimum separation in the offset-shifted xy clustering space
+  boundary_push_max_anchors: 384 # subsample anchors per crop/tile to keep pair mining tractable on 10-24 GB GPUs
+  boundary_push_max_negatives: 6 # keep only the closest cross-tree negatives per anchor

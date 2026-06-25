@@ -19,6 +19,14 @@ class TreeLearn(nn.Module):
                  dim_color=3,
                  rgb_hidden_channels=16,
                  use_geometry_constraint=True,
+                 use_boundary_push_constraint=True,
+                 boundary_push_weight=0.1,
+                 boundary_push_warmup_epochs=5,
+                 boundary_push_xy_radius=0.6,
+                 boundary_push_z_radius=2.0,
+                 boundary_push_margin=0.3,
+                 boundary_push_max_anchors=384,
+                 boundary_push_max_negatives=6,
                  fixed_modules=[],
                  use_feats=True,
                  use_coords=False,
@@ -36,6 +44,14 @@ class TreeLearn(nn.Module):
         self.max_num_points_per_voxel = max_num_points_per_voxel
         self.dim_color = dim_color
         self.use_geometry_constraint = use_geometry_constraint
+        self.use_boundary_push_constraint = use_boundary_push_constraint
+        self.boundary_push_weight = boundary_push_weight
+        self.boundary_push_warmup_epochs = boundary_push_warmup_epochs
+        self.boundary_push_xy_radius = boundary_push_xy_radius
+        self.boundary_push_z_radius = boundary_push_z_radius
+        self.boundary_push_margin = boundary_push_margin
+        self.boundary_push_max_anchors = boundary_push_max_anchors
+        self.boundary_push_max_negatives = boundary_push_max_negatives
 
         norm_fn = functools.partial(nn.BatchNorm1d, eps=1e-4, momentum=0.1)
         
@@ -136,7 +152,7 @@ class TreeLearn(nn.Module):
 
 
     @cuda_cast
-    def get_loss(self, model_output, semantic_labels, offset_labels, masks_off, masks_sem, coords, batch_ids, instance_labels, **kwargs):
+    def get_loss(self, model_output, semantic_labels, offset_labels, masks_off, masks_sem, coords, batch_ids, instance_labels, current_epoch=None, **kwargs):
         loss_dict = dict()
         
         # Define variables
@@ -161,6 +177,16 @@ class TreeLearn(nn.Module):
                 masks_off=masks_off
             )
             loss_dict['geometry_loss'] = geometry_loss * LOSS_MULTIPLIER_GEOMETRY
+        if self.use_boundary_push_constraint:
+            boundary_push_loss = self.get_boundary_push_loss(
+                coords=coords,
+                offset_predictions=offset_predictions,
+                instance_labels=instance_labels,
+                batch_ids=batch_ids,
+                masks_off=masks_off
+            )
+            boundary_push_weight = self.get_boundary_push_weight(current_epoch)
+            loss_dict['boundary_push_loss'] = boundary_push_loss * boundary_push_weight
 
         # Sum all losses
         loss = sum(_value for _value in loss_dict.values())
@@ -194,6 +220,86 @@ class TreeLearn(nn.Module):
         if not geometry_losses:
             return 0 * offset_predictions.sum()
         return torch.stack(geometry_losses).mean()
+
+
+    def get_boundary_push_weight(self, current_epoch):
+        if current_epoch is None or self.boundary_push_warmup_epochs <= 0:
+            return self.boundary_push_weight
+
+        warmup_progress = max(float(current_epoch) - 1.0, 0.0) / float(self.boundary_push_warmup_epochs)
+        warmup_progress = min(warmup_progress, 1.0)
+        return self.boundary_push_weight * warmup_progress
+
+
+    def get_boundary_push_loss(self, coords, offset_predictions, instance_labels, batch_ids, masks_off):
+        valid_mask = masks_off & (instance_labels >= 0)
+        if valid_mask.sum() <= 1:
+            return 0 * offset_predictions.sum()
+
+        raw_coords = coords[valid_mask]
+        shifted_coords = raw_coords + offset_predictions[valid_mask]
+        instance_labels = instance_labels[valid_mask]
+        batch_ids = batch_ids[valid_mask]
+
+        sample_losses = []
+        unique_batch_ids = torch.unique(batch_ids)
+        for sample_batch_id in unique_batch_ids:
+            sample_mask = batch_ids == sample_batch_id
+            if sample_mask.sum() <= 1:
+                continue
+
+            sample_raw_xy = raw_coords[sample_mask, :2]
+            sample_raw_z = raw_coords[sample_mask, 2]
+            sample_shifted_xy = shifted_coords[sample_mask, :2]
+            sample_instance_labels = instance_labels[sample_mask]
+            num_points = len(sample_raw_xy)
+            if num_points <= 1:
+                continue
+
+            if num_points > self.boundary_push_max_anchors:
+                anchor_indices = torch.randperm(num_points, device=sample_raw_xy.device)[:self.boundary_push_max_anchors]
+            else:
+                anchor_indices = torch.arange(num_points, device=sample_raw_xy.device)
+
+            anchor_raw_xy = sample_raw_xy[anchor_indices]
+            anchor_raw_z = sample_raw_z[anchor_indices]
+            anchor_shifted_xy = sample_shifted_xy[anchor_indices]
+            anchor_instance_labels = sample_instance_labels[anchor_indices]
+
+            raw_xy_distances = torch.cdist(anchor_raw_xy, sample_raw_xy)
+            raw_z_distances = torch.abs(anchor_raw_z[:, None] - sample_raw_z[None, :])
+            different_instance_mask = anchor_instance_labels[:, None] != sample_instance_labels[None, :]
+            boundary_neighbor_mask = (
+                different_instance_mask
+                & (raw_xy_distances < self.boundary_push_xy_radius)
+                & (raw_z_distances < self.boundary_push_z_radius)
+            )
+            if not boundary_neighbor_mask.any():
+                continue
+
+            shifted_xy_distances = torch.cdist(anchor_shifted_xy, sample_shifted_xy)
+            for anchor_row in range(len(anchor_indices)):
+                negative_indices = torch.nonzero(boundary_neighbor_mask[anchor_row], as_tuple=False).flatten()
+                if len(negative_indices) == 0:
+                    continue
+
+                if len(negative_indices) > self.boundary_push_max_negatives:
+                    negative_raw_distances = raw_xy_distances[anchor_row, negative_indices]
+                    _, nearest_negative_order = torch.topk(
+                        negative_raw_distances,
+                        k=self.boundary_push_max_negatives,
+                        largest=False
+                    )
+                    negative_indices = negative_indices[nearest_negative_order]
+
+                push_distances = shifted_xy_distances[anchor_row, negative_indices]
+                push_margin_violations = torch.relu(self.boundary_push_margin - push_distances)
+                if push_margin_violations.numel() > 0:
+                    sample_losses.append(push_margin_violations.pow(2).mean())
+
+        if not sample_losses:
+            return 0 * offset_predictions.sum()
+        return torch.stack(sample_losses).mean()
 
 
 def voxelize(feats, batch_ids, batch_size, voxel_size, use_coords, use_feats, max_num_points_per_voxel, epsilon=1):

@@ -1,8 +1,8 @@
 grouping: # see paper for details on these hyperparameters
   tree_class_in_dataset: 0 # semantic class index that should be treated as tree during clustering
-  tree_conf_thresh: 0.5 # minimum confidence (with regard to semantic prediction) for a point to be predicted as belonging to trees. Only predicted tree points are used during clustering
-  tau_vert: 0.6 # minimum verticality for a point to be considered during clustering
-  tau_off: 4 # maximum distance from the tree base for a point to be considered during clustering
-  tau_group: 0.15 # grouping radius of offset-shifted coordinates for clustering
-  tau_min: 50 # After grouping, clusters containing less points than this are discarded immediately since they are deemed to small to be a tree
+  tree_conf_thresh: 0.45 # slightly relaxed for mixed MLS pretraining with TLS/UAV fine-tuning
+  tau_vert: 0.35 # keep geometric seeds, but do not over-filter sparse/occluded TLS/UAV canopy points
+  tau_off: 6.0 # allow taller crowns and noisier z-offsets than the original MLS-oriented threshold
+  tau_group: 0.12 # fallback DBSCAN radius; HDBSCAN remains the default
+  tau_min: 35 # lower the minimum cluster size to reduce misses on small/partially occluded trees
   use_hdbscan: True # use hdbscan instead of dbscan for flexible clustering based on one hyperparameter only (tau_min) instead of two for dbscan (tau_min, tau_group)
