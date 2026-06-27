@@ -16,6 +16,16 @@ NON_TREE_CLASS_IN_DATASET = 1 # semantic label for non-tree class in pytorch dat
 TREE_CONF_THRESHOLD = 0.5 # minimum confidence for tree prediction
 
 
+def format_train_metric(name, value):
+    if 'pairs' in name or 'anchors' in name:
+        return f'{value:.1f}'
+    if abs(value) < 0.1:
+        return f'{value:.4f}'
+    if abs(value) < 10:
+        return f'{value:.3f}'
+    return f'{value:.2f}'
+
+
 def train(config, epoch, model, optimizer, scheduler, scaler, train_loader, logger, writer):
     model.train()
     start = time.time()
@@ -54,7 +64,7 @@ def train(config, epoch, model, optimizer, scheduler, scaler, train_loader, logg
 
     log_str = f'[TRAINING] [{epoch}/{config.epochs}], time {epoch_time:.2f}s'
     for k, v in average_losses_dict.items():
-        log_str += f', {k}: {v:.2f}'
+        log_str += f', {k}: {format_train_metric(k, v)}'
     logger.info(log_str)
     checkpoint_save(epoch, model, optimizer, config.work_dir, config.save_frequency)
     

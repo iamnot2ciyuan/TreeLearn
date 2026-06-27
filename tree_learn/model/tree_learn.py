@@ -20,13 +20,13 @@ class TreeLearn(nn.Module):
                  rgb_hidden_channels=16,
                  use_geometry_constraint=True,
                  use_boundary_push_constraint=True,
-                 boundary_push_weight=0.1,
-                 boundary_push_warmup_epochs=5,
-                 boundary_push_xy_radius=0.6,
-                 boundary_push_z_radius=2.0,
-                 boundary_push_margin=0.3,
-                 boundary_push_max_anchors=384,
-                 boundary_push_max_negatives=6,
+                 boundary_push_weight=0.35,
+                 boundary_push_warmup_epochs=15,
+                 boundary_push_xy_radius=1.2,
+                 boundary_push_z_radius=3.0,
+                 boundary_push_margin=0.8,
+                 boundary_push_max_anchors=512,
+                 boundary_push_max_negatives=12,
                  fixed_modules=[],
                  use_feats=True,
                  use_coords=False,
@@ -153,7 +153,8 @@ class TreeLearn(nn.Module):
 
     @cuda_cast
     def get_loss(self, model_output, semantic_labels, offset_labels, masks_off, masks_sem, coords, batch_ids, instance_labels, current_epoch=None, **kwargs):
-        loss_dict = dict()
+        loss_terms = dict()
+        metrics_dict = dict()
         
         # Define variables
         semantic_prediction_logits = model_output['semantic_prediction_logits'].float()
@@ -166,8 +167,8 @@ class TreeLearn(nn.Module):
             masks_sem, masks_off,
             semantic_labels, offset_labels
         )
-        loss_dict['semantic_loss'] = semantic_loss * LOSS_MULTIPLIER_SEMANTIC
-        loss_dict['offset_loss'] = offset_loss
+        loss_terms['semantic_loss'] = semantic_loss * LOSS_MULTIPLIER_SEMANTIC
+        loss_terms['offset_loss'] = offset_loss
         if self.use_geometry_constraint:
             geometry_loss = self.get_geometry_constraint_loss(
                 coords=coords,
@@ -176,9 +177,9 @@ class TreeLearn(nn.Module):
                 batch_ids=batch_ids,
                 masks_off=masks_off
             )
-            loss_dict['geometry_loss'] = geometry_loss * LOSS_MULTIPLIER_GEOMETRY
+            loss_terms['geometry_loss'] = geometry_loss * LOSS_MULTIPLIER_GEOMETRY
         if self.use_boundary_push_constraint:
-            boundary_push_loss = self.get_boundary_push_loss(
+            boundary_push_raw_loss, boundary_push_stats = self.get_boundary_push_loss(
                 coords=coords,
                 offset_predictions=offset_predictions,
                 instance_labels=instance_labels,
@@ -186,11 +187,16 @@ class TreeLearn(nn.Module):
                 masks_off=masks_off
             )
             boundary_push_weight = self.get_boundary_push_weight(current_epoch)
-            loss_dict['boundary_push_loss'] = boundary_push_loss * boundary_push_weight
+            loss_terms['boundary_push_loss'] = boundary_push_raw_loss * boundary_push_weight
+            metrics_dict['boundary_push_raw_loss'] = boundary_push_raw_loss.detach()
+            metrics_dict['boundary_push_weight'] = offset_predictions.new_tensor(float(boundary_push_weight))
+            metrics_dict['boundary_push_active_pairs'] = offset_predictions.new_tensor(float(boundary_push_stats['active_pairs']))
+            metrics_dict['boundary_push_active_anchors'] = offset_predictions.new_tensor(float(boundary_push_stats['active_anchors']))
 
         # Sum all losses
-        loss = sum(_value for _value in loss_dict.values())
-        return loss, loss_dict
+        loss = sum(_value for _value in loss_terms.values())
+        metrics_dict.update(loss_terms)
+        return loss, metrics_dict
 
 
     def get_geometry_constraint_loss(self, coords, offset_predictions, instance_labels, batch_ids, masks_off):
@@ -234,7 +240,8 @@ class TreeLearn(nn.Module):
     def get_boundary_push_loss(self, coords, offset_predictions, instance_labels, batch_ids, masks_off):
         valid_mask = masks_off & (instance_labels >= 0)
         if valid_mask.sum() <= 1:
-            return 0 * offset_predictions.sum()
+            zero = 0 * offset_predictions.sum()
+            return zero, {'active_pairs': 0, 'active_anchors': 0}
 
         raw_coords = coords[valid_mask]
         shifted_coords = raw_coords + offset_predictions[valid_mask]
@@ -242,6 +249,8 @@ class TreeLearn(nn.Module):
         batch_ids = batch_ids[valid_mask]
 
         sample_losses = []
+        active_pair_count = 0
+        active_anchor_count = 0
         unique_batch_ids = torch.unique(batch_ids)
         for sample_batch_id in unique_batch_ids:
             sample_mask = batch_ids == sample_batch_id
@@ -282,6 +291,7 @@ class TreeLearn(nn.Module):
                 negative_indices = torch.nonzero(boundary_neighbor_mask[anchor_row], as_tuple=False).flatten()
                 if len(negative_indices) == 0:
                     continue
+                active_anchor_count += 1
 
                 if len(negative_indices) > self.boundary_push_max_negatives:
                     negative_raw_distances = raw_xy_distances[anchor_row, negative_indices]
@@ -294,12 +304,37 @@ class TreeLearn(nn.Module):
 
                 push_distances = shifted_xy_distances[anchor_row, negative_indices]
                 push_margin_violations = torch.relu(self.boundary_push_margin - push_distances)
-                if push_margin_violations.numel() > 0:
-                    sample_losses.append(push_margin_violations.pow(2).mean())
+                active_violation_mask = push_margin_violations > 0
+                if not active_violation_mask.any():
+                    continue
+
+                push_margin_violations = push_margin_violations[active_violation_mask]
+                negative_indices = negative_indices[active_violation_mask]
+                negative_raw_distances = raw_xy_distances[anchor_row, negative_indices]
+                negative_raw_z = raw_z_distances[anchor_row, negative_indices]
+
+                normalized_violations = push_margin_violations / max(self.boundary_push_margin, 1e-6)
+                xy_closeness = torch.clamp(
+                    1.0 - (negative_raw_distances / max(self.boundary_push_xy_radius, 1e-6)),
+                    min=0.0,
+                    max=1.0
+                )
+                z_closeness = torch.clamp(
+                    1.0 - (negative_raw_z / max(self.boundary_push_z_radius, 1e-6)),
+                    min=0.0,
+                    max=1.0
+                )
+                pair_weights = 1.0 + 0.5 * (xy_closeness + z_closeness)
+                sample_losses.append((normalized_violations * pair_weights).mean())
+                active_pair_count += int(push_margin_violations.numel())
 
         if not sample_losses:
-            return 0 * offset_predictions.sum()
-        return torch.stack(sample_losses).mean()
+            zero = 0 * offset_predictions.sum()
+            return zero, {'active_pairs': 0, 'active_anchors': active_anchor_count}
+        return torch.stack(sample_losses).mean(), {
+            'active_pairs': active_pair_count,
+            'active_anchors': active_anchor_count
+        }
 
 
 def voxelize(feats, batch_ids, batch_size, voxel_size, use_coords, use_feats, max_num_points_per_voxel, epsilon=1):
