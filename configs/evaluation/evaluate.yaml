@@ -1,6 +1,6 @@
 paths:
-  pred_forest_path: 'data/results/full_forest/L1W_voxelized01_for_eval.laz' # path to predicted forest point cloud
-  gt_forest_path: 'data/benchmark/L1W_voxelized01_for_eval.laz' # path to ground truth forest point cloud
+  pred_forest_path: 'data/results/full_forest/L1W_voxelized01_for_eval.laz' # quick eval-subset example; if pipeline input is data/pipeline/L1W/forest/L1W.laz, point this to data/pipeline/L1W/<results_dir>/full_forest/L1W.laz
+  gt_forest_path: 'data/benchmark/L1W_voxelized01_for_eval.laz' # L1W evaluation ground truth described in docs/evaluation.md
 
 thresholds:
   min_iou_for_match: 0.5 # minimum pointwise iou between predicted and ground truth tree for hungarian matching (>> 0 required to prevent zero iou matching)

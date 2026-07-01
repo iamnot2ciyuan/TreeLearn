@@ -406,7 +406,11 @@ def assign_remaining_points_nearest_neighbor(coords, predictions, remaining_poin
     assert len(coords) == len(predictions) # input variable should be of same size
     query_idx = np.argwhere(predictions == remaining_points_idx).reshape(-1)
     reference_idx = np.argwhere(predictions != remaining_points_idx).reshape(-1)
-    knn = KNeighborsClassifier(n_neighbors=n_neighbors, n_jobs=N_JOBS)
+    if len(query_idx) == 0 or len(reference_idx) == 0:
+        return predictions.astype(np.int64)
+
+    effective_neighbors = min(n_neighbors, len(reference_idx))
+    knn = KNeighborsClassifier(n_neighbors=effective_neighbors, n_jobs=N_JOBS)
     knn.fit(coords[reference_idx].copy(), predictions[reference_idx].copy())
     neighbors_predictions = knn.predict(coords[query_idx].copy())
     predictions[query_idx] = neighbors_predictions
@@ -418,11 +422,16 @@ def propagate_preds(source_coords, source_preds, target_coords, n_neighbors, n_j
     source_coords = source_coords.astype(np.float32)
     target_coords = target_coords.astype(np.float32)
     source_preds = source_preds.astype(np.int64)
+    if len(target_coords) == 0:
+        return np.empty(0, dtype=np.int64)
+    if len(source_coords) == 0:
+        return np.full(len(target_coords), -1, dtype=np.int64)
 
     # fit nearest neighbors and get k nearest labels for each point in target_coords
-    nbrs = NearestNeighbors(n_neighbors=n_neighbors, algorithm='auto', n_jobs=n_jobs)
+    effective_neighbors = min(n_neighbors, len(source_coords))
+    nbrs = NearestNeighbors(n_neighbors=effective_neighbors, algorithm='auto', n_jobs=n_jobs)
     nbrs.fit(source_coords)
-    neighbours_indices = nbrs.kneighbors(target_coords, n_neighbors, return_distance=False)
+    neighbours_indices = nbrs.kneighbors(target_coords, effective_neighbors, return_distance=False)
     neighbours_preds = source_preds[neighbours_indices]
 
     # get most common label among neighbours to obtain target_preds
@@ -519,20 +528,26 @@ def save_treewise(coords, instance_preds, cluster_means_within_hull, insts_not_a
     os.makedirs(completely_inside_dir, exist_ok=True)
     os.makedirs(trunk_base_inside_dir, exist_ok=True)
     os.makedirs(trunk_base_outside_dir, exist_ok=True)
+    positive_instance_ids = np.sort(np.unique(instance_preds[instance_preds > non_trees_label_in_grouping]))
+    positive_instance_to_idx = {int(label): idx for idx, label in enumerate(positive_instance_ids)}
 
     for i in np.unique(instance_preds):
         pred_coord = coords[instance_preds == i]
         pred_coord = np.hstack([pred_coord, i * np.ones(len(pred_coord))[:, None]])
-        if i == non_trees_label_in_grouping:
+        if i <= non_trees_label_in_grouping:
             # use offset=false here for easy visualization of all individual trees in cloudcompare
             save_data(pred_coord, save_format, 'non_trees', plot_results_dir, use_offset=False)
             continue
 
-        if cluster_means_within_hull[i-1] and insts_not_at_edge[i-1]:
+        cluster_idx = positive_instance_to_idx.get(int(i))
+        if cluster_idx is None:
+            continue
+
+        if cluster_means_within_hull[cluster_idx] and insts_not_at_edge[cluster_idx]:
             save_data(pred_coord, save_format, str(int(i)), completely_inside_dir, use_offset=False)
-        elif cluster_means_within_hull[i-1] and not insts_not_at_edge[i-1]:
+        elif cluster_means_within_hull[cluster_idx] and not insts_not_at_edge[cluster_idx]:
             save_data(pred_coord, save_format, str(int(i)), trunk_base_inside_dir, use_offset=False)
-        elif not cluster_means_within_hull[i-1]:
+        elif not cluster_means_within_hull[cluster_idx]:
             save_data(pred_coord, save_format, str(int(i)), trunk_base_outside_dir, use_offset=False)
 
 

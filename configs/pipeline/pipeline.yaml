@@ -5,7 +5,7 @@ model:
   spatial_shape: [500, 500, 1000]
 
 ############ non-default args
-forest_path: 'data/benchmark/L1W_voxelized01_for_eval.laz' # .npz 已删；用原始 laz，运行时会再写出居中 .npz
+forest_path: 'data/benchmark/L1W_voxelized01_for_eval.laz' # quick eval-subset path; for the doc-faithful full-L1W pipeline use data/pipeline/L1W/forest/L1W.laz
 pretrain: 'data/model_weights/epoch_781.pth'
 fp16: True
 tile_generation: True # 保持 True，让它重新切

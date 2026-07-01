@@ -3,14 +3,42 @@ import pandas as pd
 import scipy
 
 
+def _count_tree_instances(instance_ids):
+    return int(np.max(instance_ids)) + 1 if np.any(instance_ids >= 0) else 0
+
+
+def _get_prediction_mask(instance_preds, instance_pred):
+    if instance_pred < 0:
+        return np.zeros_like(instance_preds, dtype=bool)
+    return instance_preds == instance_pred
+
+
+def _get_regularized_extent(values, trim_count=5, min_extent=1e-6):
+    values = np.asarray(values, dtype=np.float64)
+    if values.size == 0:
+        return min_extent
+
+    sorted_values = np.sort(values)
+    if values.size >= trim_count:
+        regularized = sorted_values[-trim_count]
+    else:
+        regularized = sorted_values[-1]
+    return max(float(regularized), min_extent)
+
+
 ################################## Instance detection evaluation: get matched gts and preds as well as iou, precision and recall matrices
 def get_detections(instance_labels, instance_preds, min_iou_match, non_tree_label):
-    iou_matrix = np.zeros((np.max(instance_preds)+1, np.max(instance_labels)+1))
-    precision_matrix = np.zeros((np.max(instance_preds)+1, np.max(instance_labels)+1))
-    recall_matrix = np.zeros((np.max(instance_preds)+1, np.max(instance_labels)+1))
+    num_preds = _count_tree_instances(instance_preds)
+    num_labels = _count_tree_instances(instance_labels)
+    iou_matrix = np.zeros((num_preds, num_labels))
+    precision_matrix = np.zeros((num_preds, num_labels))
+    recall_matrix = np.zeros((num_preds, num_labels))
+    if num_preds == 0 or num_labels == 0:
+        empty = np.empty(0, dtype=np.int64)
+        return empty, empty, iou_matrix, precision_matrix, recall_matrix
     
     ################## calculate iou, precision and recall for each instance_pred and instance_label
-    for instance_pred in np.arange(np.max(instance_preds)+1):
+    for instance_pred in np.arange(num_preds):
         instance_pred_mask = instance_preds == instance_pred
         instance_labels_part_of_instance_pred = np.unique(instance_labels[instance_pred_mask])
         instance_labels_part_of_instance_pred = instance_labels_part_of_instance_pred[instance_labels_part_of_instance_pred != non_tree_label]
@@ -57,6 +85,10 @@ def get_detection_failures(matched_gts, matched_preds, unique_instance_labels, u
     non_matched_gts_corresponding_pred = []
     non_matched_gts_corresponding_other_tree = []
     for non_matched_gt in non_matched_gts:
+        if recall_matrix.shape[0] == 0:
+            non_matched_gts_corresponding_other_tree.append(np.nan)
+            non_matched_gts_corresponding_pred.append(np.nan)
+            continue
         if recall_matrix[:, non_matched_gt].max() < min_recall_for_gt: # no undersegmentation error, e.g. in case that the tree is not detected at all
             non_matched_gts_corresponding_other_tree.append(np.nan)
             non_matched_gts_corresponding_pred.append(np.nan)
@@ -64,6 +96,9 @@ def get_detection_failures(matched_gts, matched_preds, unique_instance_labels, u
             corresponding_pred = np.argmax(recall_matrix[:, non_matched_gt])
             non_matched_gts_corresponding_pred.append(corresponding_pred)
             other_gts = np.delete(np.arange(recall_matrix.shape[1]), non_matched_gt)
+            if other_gts.size == 0:
+                non_matched_gts_corresponding_other_tree.append(np.nan)
+                continue
             argmin_recall_other_gts = recall_matrix[corresponding_pred, other_gts].argmax()
             
             if recall_matrix[corresponding_pred, other_gts][argmin_recall_other_gts] < min_recall_for_gt:
@@ -110,7 +145,7 @@ def evaluate_no_partition(instance_preds, instance_labels, unique_gts, unique_pr
         val_res['instance_pred'].append(mapping_to_original_pred_nums[instance_pred])
         val_res['instance_label'].append(mapping_to_original_gt_nums[instance_label])
 
-        ind_pred_positive = instance_preds == instance_pred
+        ind_pred_positive = _get_prediction_mask(instance_preds, instance_pred)
         ind_positive = instance_labels == instance_label
 
         tp, fp, tn, fn = get_eval_components(ind_pred_positive, ind_positive)
@@ -140,7 +175,7 @@ def evaluate_xy_partition(instance_preds, instance_labels, unique_gts, unique_pr
         val_res['instance_pred'].append(mapping_to_original_pred_nums[instance_pred])
         val_res['instance_label'].append(mapping_to_original_gt_nums[instance_label])
 
-        ind_pred_positive = instance_preds == instance_pred
+        ind_pred_positive = _get_prediction_mask(instance_preds, instance_pred)
         ind_positive = instance_labels == instance_label
     
         # calculate tree position and center xy-coordinates according to it
@@ -148,6 +183,8 @@ def evaluate_xy_partition(instance_preds, instance_labels, unique_gts, unique_pr
         min_z = np.min(tree_coords[:, 2])
         z_thresh = min_z + 0.30
         lowest_points = tree_coords[tree_coords[:, 2] <= z_thresh]
+        if len(lowest_points) == 0:
+            lowest_points = tree_coords
         position = np.mean(lowest_points, axis=0)
         position = position[:2]
         coords_centered = coords[:, :2] - position
@@ -155,8 +192,7 @@ def evaluate_xy_partition(instance_preds, instance_labels, unique_gts, unique_pr
         # relative distance to seedpoint (0=seedpoint, 1=most distant point)
         distance_from_seedpoint = np.linalg.norm(coords_centered, ord=None, axis=1)
         distance_from_seedpoint_tree = distance_from_seedpoint[ind_positive]
-        sorted_inds = distance_from_seedpoint_tree.argsort()
-        regularized_max = distance_from_seedpoint_tree[sorted_inds[-5]]
+        regularized_max = _get_regularized_extent(distance_from_seedpoint_tree)
         distance_from_seedpoint = distance_from_seedpoint / regularized_max
 
         # get precision, recall and F1-score radial
@@ -195,17 +231,16 @@ def evaluate_z_partition(instance_preds, instance_labels, unique_gts, unique_pre
         val_res['instance_pred'].append(mapping_to_original_pred_nums[instance_pred])
         val_res['instance_label'].append(mapping_to_original_gt_nums[instance_label])
 
-        ind_pred_positive = instance_preds == instance_pred
+        ind_pred_positive = _get_prediction_mask(instance_preds, instance_pred)
         ind_positive = instance_labels == instance_label
         tree_coords = coords[ind_positive]
 
         # get relative distance to lowest point (0=lowest point, 1=highest point)
-        coords_temp = coords - np.array([0, 0, np.min(tree_coords[:, -1])])
-        coords_temp_z = coords_temp[:, -1]
-
-        sorted_inds = tree_coords[:, 2].argsort()
-        regularized_max = tree_coords[:, 2][sorted_inds[-5]]
-        coords_temp_z = coords_temp_z / (regularized_max - np.min(tree_coords[:, -1]))
+        tree_min_z = np.min(tree_coords[:, 2])
+        coords_temp_z = coords[:, 2] - tree_min_z
+        tree_heights = tree_coords[:, 2] - tree_min_z
+        regularized_max = _get_regularized_extent(tree_heights)
+        coords_temp_z = coords_temp_z / regularized_max
 
         # get precision, recall and F1-score vertical
         for i in range(len(intvls) - 1):

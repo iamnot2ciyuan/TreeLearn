@@ -55,8 +55,8 @@ def evaluate(config, config_path=None):
     matched_gts, matched_preds, iou_matrix, precision_matrix, recall_matrix = detection_results
 
     # get detection failures by comparing matched gts and preds to all gts and preds
-    unique_instance_labels = np.arange(np.max(gt_forest_instance_labels) + 1)
-    unique_instance_preds = np.arange(np.max(instance_preds) + 1)
+    unique_instance_labels = np.arange(iou_matrix.shape[1], dtype=np.int64)
+    unique_instance_preds = np.arange(iou_matrix.shape[0], dtype=np.int64)
     detection_failures = get_detection_failures(matched_gts, matched_preds, unique_instance_labels, unique_instance_preds, iou_matrix, precision_matrix, recall_matrix, 
                                                 config.thresholds.min_precision_for_pred, config.thresholds.min_recall_for_gt)
     non_matched_gts, non_matched_preds, non_matched_preds_corresponding_gt, non_matched_gts_corresponding_pred, non_matched_gts_corresponding_other_tree = detection_failures
@@ -64,10 +64,14 @@ def evaluate(config, config_path=None):
     ################################## GETTING SEGMENTATION RESULTS
     logger.info('getting segmentation results...')
     # unique gts and corresponding preds based on maximum iou to calculate coverage (according to ForAINet paper), as well as precision and recall on the point level
-    unique_gts = np.arange(iou_matrix.shape[1])
-    unique_preds = iou_matrix.argmax(axis=0)
-    assert np.max(gt_forest_instance_labels) == np.max(unique_gts)
-    assert np.max(instance_preds) == iou_matrix.shape[0] - 1
+    unique_gts = np.arange(iou_matrix.shape[1], dtype=np.int64)
+    if iou_matrix.shape[0] == 0:
+        unique_preds = -1 * np.ones(iou_matrix.shape[1], dtype=np.int64)
+    else:
+        unique_preds = iou_matrix.argmax(axis=0)
+        if unique_gts.size > 0:
+            assert np.max(gt_forest_instance_labels) == np.max(unique_gts)
+        assert np.max(instance_preds) == iou_matrix.shape[0] - 1
     # get fine-grained instance segmentation evaluation
     instance_segmentation_results = evaluate_instance_segmentation(instance_preds, gt_forest_instance_labels, unique_gts, unique_preds, gt_forest_coords, 
                                                                    mapping_to_original_gt_nums, mapping_to_original_pred_nums, config.partitions.xy_partition, 
@@ -111,8 +115,11 @@ def evaluate(config, config_path=None):
     commission_error_rate = np.round(commission_error_rate * 100, 1)
     f1_score = np.round(f1_score * 100, 1)
     # calculate aggregated segmentation metrics
-    prec_rec_iou = no_partition[['prec', 'rec', 'iou']]
-    evaluation_scores_meaned = np.round(prec_rec_iou.mean(0) * 100, 1)
+    if no_partition.empty:
+        evaluation_scores_meaned = {'prec': 0.0, 'rec': 0.0, 'iou': 0.0}
+    else:
+        prec_rec_iou = no_partition[['prec', 'rec', 'iou']]
+        evaluation_scores_meaned = np.round(prec_rec_iou.mean(0) * 100, 1)
     
     ################################## LOG METRICS
     # Core detection metrics
