@@ -17,6 +17,7 @@ class TreeLearn(nn.Module):
                  dim_coord=3,
                  dim_feat=1,
                  dim_color=3,
+                 use_rgb_gate=True,
                  rgb_hidden_channels=16,
                  use_geometry_constraint=True,
                  use_boundary_push_constraint=True,
@@ -43,6 +44,7 @@ class TreeLearn(nn.Module):
         self.spatial_shape = spatial_shape
         self.max_num_points_per_voxel = max_num_points_per_voxel
         self.dim_color = dim_color
+        self.use_rgb_gate = use_rgb_gate
         self.use_geometry_constraint = use_geometry_constraint
         self.use_boundary_push_constraint = use_boundary_push_constraint
         self.boundary_push_weight = boundary_push_weight
@@ -63,23 +65,24 @@ class TreeLearn(nn.Module):
         self.unet = UBlock(block_channels, norm_fn, 2, ResidualBlock, kernel_size, indice_key_id=1)
         self.output_layer = spconv.SparseSequential(norm_fn(channels), nn.ReLU())
 
-        # Lightweight point-wise RGB encoder for late gating; no parallel sparse U-Net to avoid OOM.
-        self.rgb_encoder = nn.Sequential(
-            nn.Linear(dim_color, rgb_hidden_channels),
-            nn.ReLU(),
-            nn.Linear(rgb_hidden_channels, rgb_hidden_channels),
-            nn.ReLU()
-        )
-        self.rgb_gate = nn.Linear(rgb_hidden_channels, channels)
+        if self.use_rgb_gate:
+            # Lightweight point-wise RGB encoder for late gating; no parallel sparse U-Net to avoid OOM.
+            self.rgb_encoder = nn.Sequential(
+                nn.Linear(dim_color, rgb_hidden_channels),
+                nn.ReLU(),
+                nn.Linear(rgb_hidden_channels, rgb_hidden_channels),
+                nn.ReLU()
+            )
+            self.rgb_gate = nn.Linear(rgb_hidden_channels, channels)
         
         # head
         self.semantic_linear = MLP(channels, 2, norm_fn=norm_fn, num_layers=2)
         self.offset_linear = MLP(channels, 3, norm_fn=norm_fn, num_layers=2)
         self.init_weights()
-        # Zero-init the gate weights and use a negative bias so sigmoid(mask) starts near 0,
-        # keeping the residual fusion close to the converged geometry-only baseline at startup.
-        nn.init.constant_(self.rgb_gate.weight, 0)
-        nn.init.constant_(self.rgb_gate.bias, -6.0)
+        if self.use_rgb_gate:
+            # Start near the geometry-only baseline, then let training learn color influence.
+            nn.init.constant_(self.rgb_gate.weight, 0)
+            nn.init.constant_(self.rgb_gate.bias, -6.0)
 
         # weight init
         for mod in fixed_modules:
@@ -132,16 +135,18 @@ class TreeLearn(nn.Module):
     def forward_head(self, backbone_output, v2p_map, colors=None):
         output = dict()
         backbone_feats = backbone_output.features[v2p_map]
-        if colors is None:
-            raise KeyError("Late RGB gating expects point-wise `colors` with shape [N, 3].")
-        if colors.shape[1] != self.dim_color:
-            raise ValueError(f"Expected colors with {self.dim_color} channels, got shape {tuple(colors.shape)}.")
-        colors = colors.to(device=backbone_feats.device, dtype=backbone_feats.dtype)
-
-        rgb_encoded_feats = self.rgb_encoder(colors)
-        gate_mask = torch.sigmoid(self.rgb_gate(rgb_encoded_feats))
-        # SparseTensor alignment: fuse only after mapping decoder voxel features back to point order via v2p_map.
-        fused_feats = backbone_feats + backbone_feats * gate_mask
+        fused_feats = backbone_feats
+        gate_mask = None
+        if self.use_rgb_gate:
+            if colors is None:
+                raise KeyError("Late RGB gating expects point-wise `colors` with shape [N, 3].")
+            if colors.shape[1] != self.dim_color:
+                raise ValueError(f"Expected colors with {self.dim_color} channels, got shape {tuple(colors.shape)}.")
+            colors = colors.to(device=backbone_feats.device, dtype=backbone_feats.dtype)
+            rgb_encoded_feats = self.rgb_encoder(colors)
+            gate_mask = torch.sigmoid(self.rgb_gate(rgb_encoded_feats))
+            # SparseTensor alignment: fuse after mapping decoder voxel features back to point order via v2p_map.
+            fused_feats = backbone_feats + backbone_feats * gate_mask
 
         output['backbone_feats'] = backbone_feats
         output['rgb_gate_mask'] = gate_mask

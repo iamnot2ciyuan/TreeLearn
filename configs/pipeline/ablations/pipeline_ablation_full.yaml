@@ -1,0 +1,28 @@
+# Inference config for ablation A3: full model with RGB gate and boundary push.
+default_args: ["configs/_modular/sample_generation.yaml", "configs/_modular/model.yaml", "configs/_modular/grouping.yaml", "configs/_modular/dataset_test.yaml"]
+
+model:
+  spatial_shape: [500, 500, 1000]
+  use_rgb_gate: True
+  use_boundary_push_constraint: True
+
+forest_path: 'data/benchmark/L1W_voxelized01_for_eval.laz'
+pretrain: 'work_dirs/train_ablation_full/epoch_1000.pth'
+fp16: True
+tile_generation: True
+
+dataloader:
+  batch_size: 1
+  num_workers: 2
+
+shape_cfg:
+  outer_remove: ~
+  alpha: 0.6
+  buffer_size_to_determine_edge_trees: 0.3
+
+save_cfg:
+  save_formats: ['laz']
+  save_treewise: True
+  save_pointwise: True
+  return_type: 'original'
+  results_dir: 'results_ablation_full'

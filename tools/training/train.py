@@ -1,4 +1,5 @@
 import os.path as osp
+import random
 import time
 import torch
 import tqdm
@@ -14,6 +15,15 @@ from tree_learn.dataset import TreeDataset
 TREE_CLASS_IN_DATASET = 0 # semantic label for tree class in pytorch dataset
 NON_TREE_CLASS_IN_DATASET = 1 # semantic label for non-tree class in pytorch dataset
 TREE_CONF_THRESHOLD = 0.5 # minimum confidence for tree prediction
+
+
+def set_random_seed(seed):
+    if seed is None:
+        return
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 def format_train_metric(name, value):
@@ -120,6 +130,7 @@ def pointwise_eval(semantic_prediction_logits, offset_predictions, semantic_labe
 
 def main():
     args, config = get_args_and_cfg()
+    set_random_seed(getattr(config, 'seed', None))
     logger, writer = init_train_logger(config, args)
 
     # training objects

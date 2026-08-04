@@ -6,6 +6,8 @@ model:
   use_coords: False # whether to use the coordinates as network input or not. Coords are redundant since relativ position defined by voxel grid (default is False)
   dim_coord: 3 # dimension of coordinates (not used if use_coords is False)
   dim_feat: 1 # dimension of precomputed features (not used if use_feats is False)
+  use_rgb_gate: True # enable the RGB late-gating fusion branch
+  rgb_hidden_channels: 16 # hidden width of the lightweight RGB gate MLP
   max_num_points_per_voxel: 3 # maximum number of points within a voxel to use for feature averaging (technical detail, not that important)
   fixed_modules: [] # modules whose parameters are not updated during training
   spatial_shape: ~ # spatial shape of the tiles/crops (technical detail, not that important).

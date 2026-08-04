@@ -1,0 +1,38 @@
+# Ablation A2: Boundary push only, RGB gate disabled.
+default_args: ["configs/_modular/model.yaml", "configs/_modular/dataset_train.yaml", "configs/_modular/dataset_test.yaml"]
+
+model:
+  spatial_shape: [500, 500, 1000]
+  use_rgb_gate: False
+  use_boundary_push_constraint: True
+
+dataloader:
+  train:
+    batch_size: 2
+    num_workers: 2
+  test:
+    batch_size: 1
+    num_workers: 1
+
+optimizer:
+  type: 'AdamW'
+  lr: 0.0001
+  weight_decay: 0.001
+
+scheduler:
+  t_initial: 1000
+  lr_min: 0.000001
+  cycle_decay: 1
+  warmup_lr_init: 0.000001
+  warmup_t: 100
+  cycle_limit: 1
+  t_in_epochs: True
+
+seed: 42
+epochs: 1000
+examples_per_epoch: 500
+fp16: True
+pretrain: 'data/model_weights/hais_ckpt_spconv2.pth'
+grad_norm_clip: True
+save_frequency: 20
+validation_frequency: 20
