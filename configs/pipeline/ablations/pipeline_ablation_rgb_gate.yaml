@@ -7,7 +7,7 @@ model:
   use_boundary_push_constraint: False
 
 forest_path: 'data/benchmark/L1W_voxelized01_for_eval.laz'
-pretrain: 'work_dirs/train_ablation_rgb_gate/epoch_1000.pth'
+pretrain: 'work_dirs/train_ablation_rgb_gate/A1epoch1000.pth'
 fp16: True
 tile_generation: True
 

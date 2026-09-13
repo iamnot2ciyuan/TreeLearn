@@ -1,8 +1,13 @@
 grouping: # see paper for details on these hyperparameters
   tree_class_in_dataset: 0 # semantic class index that should be treated as tree during clustering
-  tree_conf_thresh: 0.45 # slightly relaxed for mixed MLS pretraining with TLS/UAV fine-tuning
-  tau_vert: 0.35 # keep geometric seeds, but do not over-filter sparse/occluded TLS/UAV canopy points
-  tau_off: 6.0 # allow taller crowns and noisier z-offsets than the original MLS-oriented threshold
+  tree_conf_thresh: 0.50 # L1W finalized: Ecom/F1 plateau across 0.45-0.60; keep 0.50
+  tau_vert: 0.35 # L1W finalized; 0.40 showed no gain in one-at-a-time sweep
+  tau_off: 6.0 # L1W finalized; 5.0 showed no gain in one-at-a-time sweep
   tau_group: 0.12 # fallback DBSCAN radius; HDBSCAN remains the default
-  tau_min: 35 # lower the minimum cluster size to reduce misses on small/partially occluded trees
+  tau_min: 100 # L1W finalized: best F1/Ecom on eval_subset (100 ties 120)
   use_hdbscan: True # use hdbscan instead of dbscan for flexible clustering based on one hyperparameter only (tau_min) instead of two for dbscan (tau_min, tau_group)
+  # Prefer CSE over post-hoc seed merge for near-duplicate subclusters (L1W sweep)
+  cluster_selection_epsilon: 0.50 # best: C=99.4 Ecom=0.6 F1=99.4 Cov=88.3; >=0.75 over-merges neighbors
+  merge_seed_dist: null # disabled: CSE alone beats md=1.0 seed merge (Ecom 0.6 vs 1.3)
+  merge_height_overlap: null
+  merge_weak_seed_frac: null

@@ -208,7 +208,8 @@ def _cluster_tree_points(cluster_coords_xy, grouping_cfg, not_assigned_label_in_
             cluster_coords_xy,
             grouping_cfg.tau_min,
             not_assigned_label_in_grouping,
-            start_num_preds
+            start_num_preds,
+            cluster_selection_epsilon=getattr(grouping_cfg, 'cluster_selection_epsilon', 0.0),
         )
     else:
         pred_instances = group_dbscan(
@@ -282,7 +283,20 @@ def get_instances(coords, offset, semantic_prediction_logits, grouping_cfg, vert
         predictions[tree_mask] = non_trees_label_in_grouping
         return predictions.astype(np.int64)
 
-    predictions[ind_cluster] = pred_instances 
+    predictions[ind_cluster] = pred_instances
+
+    # Optional duplicate-seed suppression after HDBSCAN / DBSCAN, before NN assignment.
+    predictions, _ = suppress_duplicate_seed_clusters(
+        coords,
+        offset,
+        predictions,
+        not_assigned_label_in_grouping,
+        non_trees_label_in_grouping,
+        getattr(grouping_cfg, 'merge_seed_dist', None),
+        getattr(grouping_cfg, 'merge_height_overlap', None),
+        getattr(grouping_cfg, 'merge_weak_seed_frac', None),
+        start_num_preds=start_num_preds,
+    )
     return predictions.astype(np.int64)
 
 
@@ -298,14 +312,143 @@ def group_dbscan(cluster_coords, radius, npoint_thr, not_assigned_label_in_group
 
 
 # HDBSCAN
-def group_hdbscan(cluster_coords, npoint_thr, not_assigned_label_in_grouping, start_num_preds):
-    clustering = HDBSCAN(min_cluster_size=npoint_thr, n_jobs=N_JOBS).fit(cluster_coords)
+def group_hdbscan(cluster_coords, npoint_thr, not_assigned_label_in_grouping, start_num_preds,
+                  cluster_selection_epsilon=0.0):
+    clustering = HDBSCAN(
+        min_cluster_size=npoint_thr,
+        cluster_selection_epsilon=float(cluster_selection_epsilon or 0.0),
+        n_jobs=N_JOBS,
+    ).fit(cluster_coords)
     cluster_nums, n_points = np.unique(clustering.labels_, return_counts=True)
     valid_cluster_nums = cluster_nums[(n_points >= npoint_thr) & (cluster_nums != -1)]
     ind_valid = np.isin(clustering.labels_, valid_cluster_nums)
     clustering.labels_[ind_valid], _ = make_labels_consecutive(clustering.labels_[ind_valid], start_num=start_num_preds)
     clustering.labels_[np.logical_not(ind_valid)] = not_assigned_label_in_grouping
     return clustering.labels_
+
+
+def _interval_overlap_ratio(zmin_a, zmax_a, zmin_b, zmax_b):
+    inter = max(0.0, min(zmax_a, zmax_b) - max(zmin_a, zmin_b))
+    union = max(zmax_a, zmax_b) - min(zmin_a, zmin_b)
+    return inter / union if union > 0 else 0.0
+
+
+def suppress_duplicate_seed_clusters(
+    coords,
+    offset,
+    predictions,
+    not_assigned_label_in_grouping,
+    non_trees_label_in_grouping,
+    merge_seed_dist,
+    merge_height_overlap,
+    merge_weak_seed_frac,
+    start_num_preds=1,
+):
+    """Merge near-duplicate HDBSCAN seed clusters before nearest-neighbor assignment.
+
+    A pair of seed clusters is merged when:
+      1) offset-shifted XY seed-center distance <= merge_seed_dist
+      2) seed Z-interval overlap ratio >= merge_height_overlap
+      3) min(n_a, n_b) / max(n_a, n_b) <= merge_weak_seed_frac
+         (at least one cluster is relatively seed-weak vs its partner)
+
+    Returns (predictions, n_merges). Disabled when any merge_* arg is None.
+    """
+    if merge_seed_dist is None or merge_height_overlap is None or merge_weak_seed_frac is None:
+        return predictions.astype(np.int64), 0
+
+    predictions = np.asarray(predictions, dtype=np.int64).copy()
+    seed_mask = (predictions != not_assigned_label_in_grouping) & (predictions != non_trees_label_in_grouping)
+    if not np.any(seed_mask):
+        return predictions, 0
+
+    labels = np.unique(predictions[seed_mask])
+    if len(labels) < 2:
+        return predictions, 0
+
+    coords = np.asarray(coords)
+    offset = np.asarray(offset)
+    shifted_xy = (coords + offset)[:, :2]
+
+    centers = []
+    z_ranges = []
+    counts = []
+    for lab in labels:
+        m = predictions == lab
+        centers.append(shifted_xy[m].mean(axis=0))
+        z = coords[m, 2]
+        z_ranges.append((float(z.min()), float(z.max())))
+        counts.append(int(m.sum()))
+    centers = np.asarray(centers, dtype=np.float64)
+    counts = np.asarray(counts, dtype=np.int64)
+
+    parent = np.arange(len(labels), dtype=np.int64)
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i, j):
+        ri, rj = find(i), find(j)
+        if ri == rj:
+            return False
+        # keep the component with more seeds as representative root preference
+        if counts[ri] < counts[rj]:
+            ri, rj = rj, ri
+        parent[rj] = ri
+        return True
+
+    nn = NearestNeighbors(radius=float(merge_seed_dist), algorithm="ball_tree")
+    nn.fit(centers)
+    n_merges = 0
+    for i in range(len(labels)):
+        nbr_idx = nn.radius_neighbors([centers[i]], return_distance=False)[0]
+        for j in nbr_idx:
+            if j <= i:
+                continue
+            n_a, n_b = int(counts[i]), int(counts[j])
+            weak_frac = min(n_a, n_b) / max(n_a, n_b)
+            if weak_frac > float(merge_weak_seed_frac):
+                continue
+            h_ov = _interval_overlap_ratio(z_ranges[i][0], z_ranges[i][1], z_ranges[j][0], z_ranges[j][1])
+            if h_ov < float(merge_height_overlap):
+                continue
+            if union(i, j):
+                n_merges += 1
+
+    if n_merges == 0:
+        return predictions, 0
+
+    # Map each original label to the label of the largest seed cluster in its component.
+    root_to_members = {}
+    for i in range(len(labels)):
+        root_to_members.setdefault(find(i), []).append(i)
+
+    remap = {}
+    for members in root_to_members.values():
+        keep_i = max(members, key=lambda idx: counts[idx])
+        keep_lab = int(labels[keep_i])
+        for idx in members:
+            remap[int(labels[idx])] = keep_lab
+
+    # Vectorized remap for seed points only.
+    seed_mask = (predictions != not_assigned_label_in_grouping) & (predictions != non_trees_label_in_grouping)
+    seed_labels = predictions[seed_mask]
+    max_lab = int(seed_labels.max()) if seed_labels.size else 0
+    lut = np.arange(max_lab + 1, dtype=np.int64)
+    for old_lab, new_lab in remap.items():
+        if 0 <= old_lab <= max_lab:
+            lut[old_lab] = new_lab
+    predictions[seed_mask] = lut[seed_labels]
+
+    # Re-number remaining seed labels consecutively for stable downstream IDs.
+    seed_mask = (predictions != not_assigned_label_in_grouping) & (predictions != non_trees_label_in_grouping)
+    if np.any(seed_mask):
+        predictions[seed_mask], _ = make_labels_consecutive(predictions[seed_mask], start_num=start_num_preds)
+
+    return predictions.astype(np.int64), n_merges
 
 
 # helper function that makes labels consecutive (e.g., 0, 1, 2, 3, ...); also returns back mapping dictionary to original labels

@@ -27,7 +27,7 @@ from run_l1w_workflow import (  # noqa: E402
 )
 
 
-DEFAULT_EPOCHS = [680, 720, 781]
+DEFAULT_EPOCHS = [1000]
 DEFAULT_TRAIN_WORK_DIR = REPO_ROOT / "work_dirs" / "train_20260627"
 
 

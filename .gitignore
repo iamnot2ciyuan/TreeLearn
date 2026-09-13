@@ -55,14 +55,20 @@ __pycache__/
 # package creation
 *.egg-info/
 
-# large files
-work_dirs
-data
+# large files / datasets / checkpoints
+work_dirs/
+data/
+logs/
+.codex_*/
 *.tsv
 *.npy
 *.laz
+*.las
 *.npz
 *.zip
+*.pkl
+*.ply
+*.bin
 *.pth
 *.pth.tar
 *.pt

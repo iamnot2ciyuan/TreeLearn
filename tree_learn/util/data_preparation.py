@@ -12,6 +12,22 @@ INSTANCE_LABEL_IGNORE_IN_RAW_DATA = -1 # label for unlabeled in raw data
 NON_TREE_CLASS_IN_RAW_DATA = 0 # label for non-trees in raw data
 
 
+def _to_compute_device(*arrays):
+    """Move numpy arrays to CUDA when enough free memory is available, otherwise keep them on CPU."""
+    tensors = [torch.from_numpy(np.ascontiguousarray(arr)) for arr in arrays]
+    if not torch.cuda.is_available():
+        return tensors, 'cpu'
+    try:
+        torch.cuda.empty_cache()
+        needed = sum(tensor.numel() * tensor.element_size() for tensor in tensors) + 256 * 1024 * 1024
+        free_bytes, _ = torch.cuda.mem_get_info()
+        if free_bytes < needed:
+            return tensors, 'cpu'
+        return [tensor.cuda() for tensor in tensors], 'cuda'
+    except RuntimeError:
+        return tensors, 'cpu'
+
+
 def normalize_colors(colors):
     colors = colors.astype(np.float32)
     if colors.size == 0:
@@ -460,9 +476,10 @@ class SampleGenerator:
         points = np.hstack((self.points, self.label.reshape(-1, 1)))
         points = np.hstack([points, self.feats, self.colors])
 
-        # to cuda for faster performance
-        points = torch.from_numpy(points).cuda()
-        outer_square_extension = torch.from_numpy(outer_square_extension).cuda()
+        # Prefer CUDA for faster filtering, but fall back to CPU when GPU memory is scarce.
+        (points, outer_square_extension), compute_device = _to_compute_device(points, outer_square_extension)
+        if compute_device == 'cpu':
+            logger.info('using CPU for tile point filtering (CUDA unavailable or out of memory)')
         x_points = points[:, 0]
         y_points = points[:, 1]
 
@@ -507,7 +524,8 @@ class SampleGenerator:
             chunk_center_x = np.round((valid_inner_square_extension[i][0] + valid_inner_square_extension[i][1]) / 2, 6)
             chunk_center_y = np.round((valid_inner_square_extension[i][2] + valid_inner_square_extension[i][3]) / 2, 6)
             center = np.concatenate([np.array([chunk_center_x, chunk_center_y, 0, 0]), np.zeros(self.feat_dim + self.color_dim)]).reshape(1, -1)
-            valid_chunks[i] = (torch.from_numpy(valid_chunks[i]).cuda() - torch.from_numpy(center).cuda()).cpu().numpy()
+            (chunk_tensor, center_tensor), _ = _to_compute_device(valid_chunks[i], center)
+            valid_chunks[i] = (chunk_tensor - center_tensor).cpu().numpy()
 
 
         logger.info('save chunks')
