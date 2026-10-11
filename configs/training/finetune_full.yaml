@@ -1,4 +1,4 @@
-# Improved model adaptation; enable RGB only after auditing real point colors.
+# Fine-tune our trained RGB-gated model. Match model/loss settings to its original training config.
 model:
   kernel_size: 3
   channels: 32
@@ -42,13 +42,13 @@ dataloader:
   test: {batch_size: 1, num_workers: 1}
 optimizer:
   type: AdamW
-  lr: 0.0001
+  lr: 0.00001
   weight_decay: 0.001
 scheduler:
   t_initial: 50
-  lr_min: 0.00001
+  lr_min: 0.000001
   cycle_decay: 1
-  warmup_lr_init: 0.00001
+  warmup_lr_init: 0.000001
   warmup_t: 3
   cycle_limit: 1
   t_in_epochs: true
@@ -56,8 +56,10 @@ seed: 42
 epochs: 50
 examples_per_epoch: 500
 fp16: false
-# Application adaptation; published weights may already have seen L1W.
-pretrain: data/model_weights/model_weights_with_small_20241213.pth
+# Set the actual absolute server path to our epoch1000.pth (or epoch_1000.pth).
+pretrain: null
+require_pretrain: true
+pretrain_strict: true
 grad_norm_clip: 1.0
 save_frequency: 5
 validation_frequency: 1

@@ -8,12 +8,11 @@
 
 本仓库已经改过模型：有 RGB gate、同树几何一致性 loss、跨树 boundary push；原版说明没有覆盖这些改动。尤其现有 A0 配置仍继承 `use_geometry_constraint: true`，因此只是关闭 RGB/boundary 的内部对照，不能直接称为严格原版基线。
 
-建议分两条路线：
+**本次任务：从服务器上我们已经训练好的 `epoch1000.pth` 微调改造后的模型，并完整保留 RGB gate 权重。** 仓库训练器默认保存名为 `epoch_1000.pth`，服务器实际文件可能名为 `epoch1000.pth`；由服务器 Cursor 找到实际绝对路径，核查原训练配置、日志和 checkpoint 内容后写入微调配置。不要猜测路径，也不要改为官方几何模型初始化。
 
-- **应用适配（先做）**：从 `model_weights_with_small_20241213.pth` 出发，在新的人工标注样地上微调。适合需要识别小树的任务；若只考虑 >10 m 树，可用 `model_weights_20241213.pth`。这两个发布权重已有训练历史，测试集必须核查是否被初始化权重用过。
-- **论文实验**：所有对照从同一未接触最终测试样地的基础权重出发。官方 `model_weights_dirty.pth` 可作为候选，但它有旧版去噪预处理历史，且主要识别 >10 m 树。严格复现时需匹配预处理；若无法确认干净的初始化来源，则用 18 个自动标注样地重新做基础训练。不能把已在 L1W 上微调的发布权重用于宣称 L1W 独立泛化。
+微调时应保持原训练的 backbone、head、RGB hidden width、输入设置和模型开关一致。geometry/boundary 属于训练 loss，checkpoint 不足以证明当时是否开启；应读取 epoch1000 对应的原训练配置。新配置中的 geometry/boundary 参数是当前仓库候选设置，服务器必须与原训练设置核对。
 
-官方数据 ReadMe 明确记录：旧 `model_weights_finetuned` 在 benchmark 上微调；diverse 从该权重继续微调；20241213 又从 diverse 继续微调并去掉统计离群过滤。原版 `docs/segmentation_pipeline.md` 也说明 L1W 已参与默认 checkpoint 训练。论文最终版的 noisy/small/mid/large 实验设计与这些发布文件的沿袭历史应分开记录。
+官方发布权重的历史仅作为背景资料：部分权重曾在 L1W 上训练，但不能据此推断我们自己的 epoch1000 是否使用过 L1W。我们的训练、验证、初始化来源和选 checkpoint 过程也要纳入测试集独立性核查。已有的 `finetune_baseline.yaml` 是之前的可选对照模板，不属于本次默认任务。
 
 ## 2. 论文做法和本次起步配置
 
@@ -21,10 +20,10 @@
 
 论文微调训练 12,500 次 optimizer 更新，AdamW、batch size 2、weight decay 0.001、余弦学习率 5e-4 → 5e-5、无学习率 warmup；使用独立 NIBIO plot 16 验证并按最低 offset loss 选权重。论文生成总共 30,000 个微调 crops。
 
-我们新增的独立配置使用保守起点：50 epoch、每轮最多 500 crops、batch size 2、lr 1e-4 → 1e-5、3 epoch 学习率 warmup、FP32、裁剪阈值 1.0。若训练样本不少于 500 个，每轮 250 次更新，50 轮约 12,500 次更新；若样本不足，实际更新数会减少。它是适配方案，不是论文参数复现，也不保证最优。
+本次 RGB 模型微调配置使用保守起点：50 epoch、每轮最多 500 crops、batch size 2、lr 1e-5 → 1e-6、3 epoch 学习率 warmup、FP32、裁剪阈值 1.0。若训练样本不少于 500 个，每轮 250 次更新，50 轮约 12,500 次更新；若样本不足，实际更新数会减少。它是适配方案，不是论文参数复现，也不保证最优。
 
-- `configs/training/finetune_baseline.yaml`：RGB、geometry、boundary 全关闭，作为当前代码内的几何模型对照。
-- `configs/training/finetune_full.yaml`：三项改进开启。boundary 沿用当前仓库参数，15 epoch warmup；这些数值还需独立验证集验证。学习率 warmup 与 boundary loss warmup 是不同机制。
+- `configs/training/finetune_baseline.yaml`：保留的可选几何对照模板；本次不需要先运行它。
+- `configs/training/finetune_full.yaml`：本次使用的 RGB 模型配置，`pretrain` 暂为 null，必须填入服务器实际 checkpoint 路径；`require_pretrain: true` 防止误从随机初始化开跑，`pretrain_strict: true` 要求完整参数匹配。geometry/boundary 候选值须与原训练配置核对。学习率 warmup 与 boundary loss warmup 是不同机制。
 
 需要严格按论文学习率实验时，将 `lr` 改为 0.0005、`lr_min` 改为 0.00005、`warmup_t` 改为 0。保留当前 50 轮更新预算。复现还需对齐数据、预处理、模型和聚类，不能仅改学习率。
 
@@ -53,7 +52,7 @@ unzip data/downloads/FORinstance/FORinstance_dataset.zip -d data/downloads/FORin
 python tools/data_gen/download_finetune_assets.py --dataset VPMPID
 python tools/data_gen/download_finetune_assets.py --dataset QUTUWU
 python tools/data_gen/download_finetune_assets.py --dataset VPMPID \
-  --files model_weights_with_small_20241213.pth ReadMe.txt --root data/model_weights
+  --files ReadMe.txt --root data/downloads/metadata
 ```
 
 LAUTx 的六个原分辨率样地可以这样获取。下面先放在下载区，随后根据实验划分挑选训练样地，不能未经核查全部放入训练目录：
@@ -87,7 +86,7 @@ python tree_learn/util/download.py --dataset_name automatically_segmented_data -
 
 **语义编码不要弄反**：`TreeDataset` 会从 `instance_label` 动态生成语义，网络内部树=0、非树=1。生成的 crops 不需要 `semantic_labels` 字段。现有 `check_semantic_labels_npz.py` 要求该字段，且说明的编码相反，不适合检查当前生成器的输出。
 
-RGB 支路不能靠补零验证效果。LAS/LAZ 有 red/green/blue 时按 8/16 bit 数值归一化；没有颜色时流程会补零，网络仍能运行，但无法证明 RGB 提供了信息。首先统计真实颜色覆盖率、方差和归一化范围，再决定是否运行 full/RGB 消融；若只有 XYZ，就先跑 baseline 或关闭 RGB 的 geometry+boundary 版本。颜色也要与 points 同行对齐。
+本次必须保留训练好的 RGB 支路，并为微调提供真实、对齐的 RGB。RGB 支路不能靠补零验证效果。LAS/LAZ 有 red/green/blue 时按 8/16 bit 数值归一化；没有颜色时流程会补零，网络仍能运行，但无法证明 RGB 提供了信息。首先统计真实颜色覆盖率、方差和归一化范围，再决定是否运行 full/RGB 消融；若候选数据只有 XYZ，应寻找带真实 RGB 和人工实例标注的数据，或已有的可对齐影像颜色来源；不能为了开跑就关闭 RGB、随机赋色或把补零数据当作目标任务已完成。颜色也要与 points 同行对齐。
 
 ## 5. 划分及预处理
 
@@ -119,7 +118,7 @@ python tools/data_gen/gen_val_data.py --config configs/data_gen/gen_finetune_val
 
 ```bash
 python tools/data_gen/audit_dataset_splits.py \
-  --train-config configs/training/finetune_baseline.yaml \
+  --train-config configs/training/finetune_full.yaml \
   --train-data-config configs/data_gen/gen_finetune_train.yaml \
   --val-data-config configs/data_gen/gen_finetune_val.yaml \
   --fail-on-high-risk
@@ -129,15 +128,13 @@ python tools/data_gen/audit_dataset_splits.py \
 
 ## 6. 微调脚本怎么运行
 
-继续用现有 `tools/training/train.py` 即可。`pretrain` 只加载模型，优化器和 epoch 从头开始，这正是微调所需；`--resume` 还恢复优化器和 epoch，用于同一实验断点续训。
+继续用现有 `tools/training/train.py`。将 `finetune_full.yaml` 的 `pretrain` 改为核实后的 epoch1000 绝对路径。通过 `pretrain` 完整加载模型（包括 rgb_encoder/rgb_gate），优化器和微调 epoch 从 1 开始。**首次微调不要用 `--resume epoch1000.pth`**：它会恢复旧优化器并从旧 epoch+1 开始，而新配置只有 50 轮，可能一轮也不执行。`--resume` 仅用于本次微调实验自身的 checkpoint。
 
 ```bash
-python tools/training/train.py --config configs/training/finetune_baseline.yaml
-# 有真实 RGB 后运行改进模型
 python tools/training/train.py --config configs/training/finetune_full.yaml
 ```
 
-输出分别在 `work_dirs/finetune_baseline` 和 `work_dirs/finetune_full`。新增 `save_best: true` 后每次验证保存最低验证 offset loss 的 `best_offset.pth`，不用盲选 epoch_50。TensorBoard 仍记录 `val/Offset_MAE`，但实际计算的是平均三维 L2 offset 误差，不能将名称当作逐坐标 MAE。
+本次输出放在新的 `work_dirs/finetune_full`（若已存在，请设置新的 `--work_dir`）。原 epoch1000 文件保持为初始化来源。新增 `save_best: true` 后每次验证保存最低验证 offset loss 的 `best_offset.pth`，不用盲选 epoch_50。TensorBoard 仍记录 `val/Offset_MAE`，但实际计算的是平均三维 L2 offset 误差，不能将名称当作逐坐标 MAE。
 
 ```bash
 python tools/training/train.py --config configs/training/finetune_full.yaml \
@@ -149,9 +146,9 @@ tensorboard --logdir work_dirs
 
 ### 权重兼容检查必须看日志
 
-当前加载器读取 checkpoint 的 `net`，`strict=False`，遇到尺寸不匹配会跳过。官方几何权重加载到 full 时，`rgb_encoder`、`rgb_gate` 缺失是预期的：新支路按模型代码初始化。geometry/boundary 是损失约束，没有需要从 checkpoint 读取的新参数。
+当前加载器读取 checkpoint 的 `net`，默认 `strict=False` 且会跳过尺寸不匹配；本次配置通过 `pretrain_strict: true` 改为严格匹配。必须完整加载 `rgb_encoder` 和 `rgb_gate`，缺失或尺寸不匹配都不能作为正常的新支路初始化处理。geometry/boundary 是损失约束，没有需要从 checkpoint 读取的新参数。
 
-但如果 `input_conv`、`unet`、`output_layer` 或语义/offset head 大量缺失或尺寸不匹配，应停止试跑，核对 checkpoint、spconv 排列、channels、num_blocks 和输入维数。不能看到训练开始就以为成功迁移。不要随意启用 use_coords/use_feats；即使形状兼容，输入含义改变也会影响预训练适配。本次尚未下载权重，不能保证每个历史发布文件都与当前 spconv 完全兼容。
+但如果 `input_conv`、`unet`、`output_layer` 或语义/offset head 大量缺失或尺寸不匹配，应停止试跑，核对 checkpoint、spconv 排列、channels、num_blocks 和输入维数。不能看到训练开始就以为成功迁移。不要随意启用 use_coords/use_feats；即使形状兼容，输入含义改变也会影响预训练适配。本地无法检查服务器 epoch1000，服务器必须先核对 checkpoint 与其原训练代码；若严格加载失败，应恢复匹配的模型定义或核实必要格式转换，不能用宽松加载掩盖缺失。
 
 ### 是否冻结骨干
 
@@ -159,7 +156,7 @@ tensorboard --logdir work_dirs
 
 ## 7. 开跑前检查与最终评估
 
-先少量 crops、1–2 个 epoch 试跑（同时缩短 scheduler 周期和 warmup），确认：有监督的内区树点、非树点和正常 offset；loss 有限；参数确实更新；训练/验证/测试的原始来源无重叠；full 的 RGB 不是全零。正式消融用同一数据、初始化、种子和更新预算，至少比较几何 baseline、仅 RGB、仅 boundary、完整模型。geometry 应单独控制；若全组固定开启 geometry，则明确叫作加入 geometry 的内部对照。
+先少量 crops、1–2 个 epoch 试跑（同时缩短 scheduler 周期和 warmup），确认：有监督的内区树点、非树点和正常 offset；loss 有限；参数确实更新；训练/验证/测试的原始来源无重叠；full 的 RGB 不是全零。本次首先完成带 RGB gate 的已训练模型微调。最直接的效果比较是同一验证/测试数据上的 epoch1000 与微调后的 best_offset，使用一致的推理和聚类设置。额外消融不是本次必需步骤。
 
 训练器现在修正了 AMP 梯度裁剪顺序：先 `scaler.unscale_(optimizer)` 再 clip，避免裁剪被缩放后的梯度。本次微调默认 FP32；原 train.yaml 的 `fp16: True` 与旁边“关闭半精度”的注释矛盾，应以 YAML 值为准。
 
@@ -171,7 +168,7 @@ L1W 输入优先完整 `L1W.laz`（或保留完整上下文的 voxelized 版本�
 
 已阅读原模型/训练/数据/推理/评估文档，并核对实际读取器、生成器、loss、加载器和训练循环；已联网核查两个 GRO 数据集的文件元数据与 ReadMe。当前本地 `data` 只有服务试验输入，没有训练 crops 或预训练权重；系统 Python 也没有 torch/numpy/spconv。**本次提供脚本与配置并做静态/轻量检查，没有下载 GB 级点云，没有执行 GPU 训练，权重形状、RGB 有效性、实际 crop 数量和收敛仍待训练机验证。**
 
-下一步顺序：准备 Linux NVIDIA CUDA 环境 → 选目标样地及干净测试集 → 下载权重与人工标注数据 → 保留划分清单 → 生成少量 crops → baseline 试跑 → 有真实 RGB 时运行 full → 验证集选 checkpoint → 独立测试。
+下一步顺序：核查服务器 epoch1000 及原训练配置 → 检查 CUDA 环境 → 筛选带真实 RGB 的人工标注样地 → 保留划分清单 → 生成少量 crops → 完整加载 RGB 模型并试跑 → 低学习率正式微调 → 验证集选 checkpoint → 对比微调前后。
 
 ## 来源
 

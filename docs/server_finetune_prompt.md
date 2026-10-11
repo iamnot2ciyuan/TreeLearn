@@ -1,28 +1,32 @@
 # 给服务器上 Cursor 的任务提示词
 
-请在服务器上完成这个 TreeLearn 仓库的**人工标注数据微调**，包括下载、数据核验与划分、预处理、训练、验证和结果报告。请直接执行任务；遇到环境或数据问题先排查并修复，不要只写计划。不要覆盖服务器已有的未提交改动、数据或 checkpoints，也不要把大数据和权重提交到 Git。
+请执行我们改造后的 TreeLearn 模型微调：**初始化必须使用服务器上我们已训练好的 epoch1000.pth，完整保留其 RGB gate 权重**。仓库保存名可能为 epoch_1000.pth，请找到实际文件。请直接完成数据下载/核验、预处理、试跑、正式微调和结果报告。
 
-## 仓库与依据
+## 1. 同步代码，核实已训练模型
 
-1. 在现有仓库运行 `git status --short`、`git remote -v`，确认当前状态；安全地 `git fetch origin`，读取远端分支 `codex/treelearn-finetuning-guide` 上的 `docs/finetuning.md`、`docs/server_finetune_prompt.md`、微调配置和下载脚本。如果现有工作区有未提交改动或运行中的训练任务，保留它们，使用独立 worktree 或隔离目录执行。不要强制切分支或清理工作区。
-2. 以 `docs/finetuning.md` 为主要操作依据，同时核查实际代码和论文。那份指南中的参数是起步配置；根据服务器 GPU 显存、环境和数据情况调整时，记录所有修改与原因。
-3. 先报告 GPU 型号/显存、CUDA、PyTorch、spconv、Python、可用磁盘空间、仓库 commit 和现有可复用数据。优先使用已有兼容环境，避免执行会删除已有 conda 环境的 `setup/setup.sh`。如需新建环境，选择独立名称，安装与服务器 CUDA 匹配的 spconv。
+- 安全地 fetch GitHub 仓库 iamnot2ciyuan/TreeLearn 的 `codex/treelearn-finetuning-guide` 分支，阅读最新 `docs/finetuning.md`、本文件和 `configs/training/finetune_full.yaml`。保留服务器已有改动、数据和运行中的任务；必要时使用独立 worktree。
+- 查找我们已有的 epoch1000.pth / epoch_1000.pth，记录绝对路径、文件大小、SHA256、checkpoint epoch、来源实验和训练日志。多个候选时结合日志、原训练配置和 rgb_encoder/rgb_gate 参数确定目标，不要只按文件名随意挑选。
+- 查找该 checkpoint 对应的原模型定义和原训练配置，核对 channels、num_blocks、dim_feat、use_coords/use_feats、rgb_hidden_channels、voxel_size、spconv 版本，以及 geometry/boundary loss 是否开启。当前 finetune_full 是候选模板，应以我们的实际原训练配置为准保持模型和 loss 设置一致。
+- 初始化仅使用我们的 epoch1000。不要替换为官方 TreeLearn/SoftGroup 权重，不要重新初始化 RGB encoder/gate，不需要先训练关闭 RGB 的 baseline。
+- 核查 GPU/显存、CUDA、Python、torch、spconv、磁盘和已有数据；复用原训练环境。不要执行会删除已有环境的 setup/setup.sh。
 
-## 数据下载与实验划分
+## 2. 下载并检查适合 RGB 模型的数据
 
-4. 使用 `tools/data_gen/download_finetune_assets.py` 从 GRO.data 下载 TreeLearn 模型权重和需要的 LAUTx/Wytham/L1W 数据，逐个验证脚本保存的 MD5 和大小。FOR-instance 从 Zenodo 官方记录 `https://zenodo.org/records/8287792` 下载并核验 ZIP MD5；参考指南命令。若已有文件，先验校验并复用。检查该脚本的默认行为：只列目录；提供 `--files` 才下载。下载失败时保留 `.part` 证据、重试并报告，不把不完整文件当作有效数据。
-5. 解压 FOR-instance，读取其中的 `data_split_metadata.csv`，列出**真实**目录层级、列名、原始 split 和每个样地的文件名。先确定正式训练/验证/测试样地。以完整原始样地为单位划分，不要把同一样地的 crops 分到不同 split。优先将论文使用的 NIBIO plot 16 留作验证，并从训练样地排除；如果数据包路径/命名不同，按实际元数据核实。保存 `split_manifest.csv`，记录数据集、源文件、原始 split、新用途、校验信息、是否曾被初始 checkpoint 使用。保留至少一个完全独立测试样地；若无法证明初始权重没接触测试样地，就明确只报告应用适配结果，不宣称独立泛化。
-6. 本次优先微调 FOR-instance 人工标注数据。LAUTx/Wytham 可以用于后续扩展实验，但加入某数据集训练后，不要再将其作为独立测试。`model_weights_with_small_20241213.pth` 是默认应用适配起点，能覆盖小树；其历史可能已接触 L1W 和公开人工标注数据，所以 **L1W 只能作为诊断/复现检查，不能作为该权重的独立测试成绩**。若确有新的、未被初始化权重使用的测试数据，优先在其上做最终评估。
+- 优先考察 FOR-instance 人工标注数据；根据指南从官方 Zenodo 下载 ZIP，核验大小和 MD5。LAUTx/Wytham/TreeLearn 点云可用 tools/data_gen/download_finetune_assets.py 获取并校验，但不需要下载官方模型权重作为初始化。先复用并核验已有数据。
+- 在大量生成 crops 前检查每个候选来源的实际字段：米制 XYZ、treeID/classification 或等价实例标签、真实 RGB、颜色范围/方差/覆盖率。数据集名字不保证有 RGB。必须保留 RGB gate；若数据无颜色，寻找其他带真实颜色和人工实例标签的数据，或核实已有可对齐的影像颜色来源。不能关闭 RGB、随机赋色或把补零当成完成 RGB 模型微调；若最终无法取得必要数据，明确报告具体缺项和已尝试来源。
+- 核查我们 epoch1000 的原训练/验证样地、初始化来源及 checkpoint 选择过程，再划分新数据。按完整样地划分 train/val/test，不要将同一样地的 crops 随机分开。原始 metadata 中 NIBIO plot 16 可作为候选验证样地，但必须核查它是否已用于原模型训练。保存 split_manifest.csv 与颜色核验记录。L1W 是否独立应根据我们 checkpoint 的实际历史判断，不能只由官方权重历史推断。
 
-## 标注检查与预处理
+## 3. 预处理与微调
 
-7. 抽样读取每个来源的 LAS/LAZ，确认米制 XYZ、`treeID`、`classification`、实际实例数、树/非树/忽略点比例，以及 RGB 是否真实存在、是否有有效方差。核查 `tree_learn/util/data_preparation.py` 的读取规则：树 ID > 0，非树 classification 1/2，其他无树 ID 点忽略。发现标签冲突先修正映射或转换脚本，并记录转换前后的计数。不要把 RGB 常零的点云称为有颜色数据。
-8. 建立 `data/finetune/train/forests`、`data/finetune/val/forest` 等分离目录；只放目标样地数据，不要混入文档、压缩包或其他类型文件。原始文件可用符号链接，必须保留源文件名或在 manifest 中记录映射。确认验证配置 `configs/data_gen/gen_finetune_val.yaml` 的 `forest_path` 指向实际独立验证样地；默认的 `validation.laz` 只是占位名称。
-9. 先生成少量训练 crops 和验证 tiles，核对 `points`、`feat`、`colors`、`instance_label`、内区树/非树点比例、offset 监督是否有效及磁盘占用，然后再生成正式数据。当前训练 crop 配置初始为 2,000，不保证最终生成正好 2,000。若数据/参数变化，用新缓存目录或清理对应缓存并重生成。运行划分审计，并人工核对权重历史；审计不会发现预训练权重的样地泄漏。
+- 将样地放在分离的 data/finetune/train/forests、val/forest、test/forest 目录，保持原始文件名并记录来源。修改 gen_finetune_val.yaml 中占位路径为真实验证森林。按代码核查标签映射，保留非树/未标注点及树基上下文。
+- 使用 gen_finetune_train.yaml / gen_finetune_val.yaml，先少量生成，检查 points、feat、colors、instance_label 行数对齐、内区监督、offset 有效性和颜色统计，再生成正式数据。保留 0.1 m 下采样、35 m 上下文及 8 m 监督内区，与原模型设置核对。数据/参数变化后不要复用不匹配缓存。
+- 将 finetune_full.yaml 的 pretrain 写成核实后的 epoch1000 绝对路径，保留 require_pretrain: true、pretrain_strict: true、use_rgb_gate: true。严格核对主干、heads、rgb_encoder、rgb_gate 的全部参数名称与形状。加载失败先恢复匹配的代码/配置或核实必要格式转换，不能靠 strict=False 跳过已训练参数。
+- **首次微调用 pretrain，不要用 --resume epoch1000.pth**。本次重新建立低学习率优化器，微调 epoch 从 1 开始；resume 仅用于本次微调过程中生成的 checkpoint。使用新 work_dir，保留原 epoch1000。
+- 全模型低学习率微调，建议先采用 lr=1e-5、lr_min=1e-6、3 epoch 学习率 warmup、FP32、梯度裁剪 1.0、50 epoch、每轮最多 500 crops。与原学习率、GPU显存和有效数据量核对后可调整，记录原因。geometry/boundary 的权重及 warmup 保持与原设置一致或明确记录经验证的调整。
+- 先独立目录跑 1–2 epoch，确认严格加载成功、loss 有限、backbone/head/RGB gate 参数有更新、颜色传递正常、验证和 best_offset.pth 保存正常，再正式训练。故障先排查修复，记录 OOM/NaN/权重转换及修复。保留同一验证集上 epoch1000 的微调前指标作参照。
 
-## 训练与评估
+## 4. 评估与交付
 
-10. 先检查 `configs/training/finetune_baseline.yaml` 和 `configs/training/finetune_full.yaml` 的模型配置与权重格式；从权重载入日志确认 `input_conv`、`unet`、两个 head 有合理覆盖率。full 的新增 RGB 参数缺失是预期情况；主干大量缺失不是。先跑 1–2 epoch 的短试验，确认损失有限、参数更新、GPU 显存安全、验证正常及 `best_offset.pth` 真正保存，再用正式配置训练。短试验用独立 `work_dir`，不要污染正式目录。
-11. 正式运行 baseline；若 RGB 有真实信息，再运行 full。两组应使用相同训练/验证数据、同一初始权重、种子和更新预算。若 RGB 不可用，请关闭 RGB 并建立 geometry+boundary 的配置，与 baseline 比较；写明不能评估 RGB gate。需要调 batch/crops/轮数以适应显存时，让两组实际 optimizer 更新次数可比。出现 NaN、OOM 或权重不兼容，修复后重新试验，记录改动。
-12. 选择最低验证 offset loss 的 `best_offset.pth`，不要默认选最后一轮。记录每组：训练曲线、最佳 epoch、验证 offset、checkpoint 路径、模型配置、权重来源、数据版本、样地名单、GPU 与运行时间。推理和评估时模型 RGB 开关应与训练一致；pipeline 的 `pretrain` 指向选出的权重，先在验证集上固定聚类参数，再一次性用于独立测试。报告 detection F1、实例 precision/recall/coverage、omission/commission，并附失败案例。如果只有 L1W 诊断数据，就报告诊断结果，并明确其被权重历史污染的限制。
-13. 将服务器上的 `split_manifest.csv`、实际使用的配置副本、训练日志摘要、数据校验结果、最佳权重路径和最终评估写入一份 `docs/results/finetune_server_run.md`（如该目录已有同名文件，请另起名称）。大文件留在服务器并提供绝对路径，不要提交数据、训练输出或 checkpoints。最后清楚列出已经完成的步骤、尚未完成的步骤和具体阻碍；若运行超出当前会话时间，保持任务在服务器上可恢复，并提供进程/任务管理器标识及续训命令。
+- 使用验证 offset loss 最低的 best_offset.pth，并用相同数据与推理/聚类设置对比 epoch1000 与微调后权重。测试数据不能参与微调、选 checkpoint 或调参；无法证明独立性时明确描述限制。
+- 报告实际配置、数据版本/划分、RGB统计、初始 checkpoint SHA256、加载检查、微调前后验证 offset、最佳 epoch、checkpoint 绝对路径、GPU耗时，以及可执行的推理/评估命令。若有独立标注测试样地，再报告 detection F1、实例 precision/recall/coverage、omission/commission。
+- 将结果和运行记录写入 docs/results/finetune_server_run.md 或不覆盖已有文件的新报告。数据和 checkpoints 留在服务器，不提交 Git。若训练跨会话运行，留下任务/进程标识、日志和续训命令；不能只启动任务就宣称微调完成。

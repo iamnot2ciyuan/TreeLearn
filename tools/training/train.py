@@ -132,6 +132,9 @@ def pointwise_eval(semantic_prediction_logits, offset_predictions, semantic_labe
 
 def main():
     args, config = get_args_and_cfg()
+    if getattr(config, 'require_pretrain', False) and not args.resume:
+        if not config.pretrain or not osp.isfile(config.pretrain):
+            raise ValueError('Set pretrain to the existing server checkpoint before fine-tuning.')
     set_random_seed(getattr(config, 'seed', None))
     logger, writer = init_train_logger(config, args)
 
@@ -152,7 +155,7 @@ def main():
         start_epoch = load_checkpoint(args.resume, logger, model, optimizer=optimizer)
     elif config.pretrain:
         logger.info(f'Load pretrain from {config.pretrain}')
-        load_checkpoint(config.pretrain, logger, model)
+        load_checkpoint(config.pretrain, logger, model, strict=getattr(config, 'pretrain_strict', False))
 
     # train and val
     best_offset_loss = float('inf')
