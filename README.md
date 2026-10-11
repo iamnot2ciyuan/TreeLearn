@@ -40,6 +40,8 @@ If you are not interested in training your own models, but only want to use pre-
 
 If you want to train a custom model for forest segmentation, we refer to the [training guide](docs/training.md)
 
+For adapting this modified model with pretrained TreeLearn weights, see the [Chinese fine-tuning guide](docs/finetuning.md), including dataset downloads, split provenance, preprocessing, and dedicated baseline/full configurations.
+
 ## Evaluation
 
 To evaluate the segmentation results of arbitrary methods on arbitrary benchmark datasets, we refer to the [evaluation guide](docs/evaluation.md)

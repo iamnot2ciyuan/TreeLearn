@@ -1,0 +1,5 @@
+default_args: ["configs/_modular/sample_generation.yaml"]
+sample_generation:
+  stride: 1 # fraction of inner edge; ~8 m spacing, not 1 m
+# Place a genuinely held-out validation plot here; preserve its source in the split manifest.
+forest_path: data/finetune/val/forest/validation.laz

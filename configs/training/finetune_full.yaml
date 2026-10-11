@@ -1,0 +1,64 @@
+# Improved model adaptation; enable RGB only after auditing real point colors.
+model:
+  kernel_size: 3
+  channels: 32
+  num_blocks: 7
+  use_feats: false
+  use_coords: false
+  dim_coord: 3
+  dim_feat: 1
+  use_rgb_gate: true
+  use_geometry_constraint: true
+  use_boundary_push_constraint: true
+  boundary_push_weight: 0.35
+  boundary_push_warmup_epochs: 15
+  boundary_push_xy_radius: 1.2
+  boundary_push_z_radius: 3.0
+  boundary_push_margin: 0.8
+  boundary_push_max_anchors: 512
+  boundary_push_max_negatives: 12
+  rgb_hidden_channels: 16
+  fixed_modules: []
+  max_num_points_per_voxel: 3
+  spatial_shape: [500, 500, 1000]
+  voxel_size: 0.1
+
+dataset_train:
+  training: true
+  data_root: data/finetune/train/random_crops/npz
+  inner_square_edge_length: 8
+  data_augmentations:
+    jitter: true
+    flip: true
+    rot: true
+    scaled: true
+    point_jitter: true
+dataset_test:
+  training: false
+  data_root: data/finetune/val/tiles/npz
+  inner_square_edge_length: 8
+dataloader:
+  train: {batch_size: 2, num_workers: 2}
+  test: {batch_size: 1, num_workers: 1}
+optimizer:
+  type: AdamW
+  lr: 0.0001
+  weight_decay: 0.001
+scheduler:
+  t_initial: 50
+  lr_min: 0.00001
+  cycle_decay: 1
+  warmup_lr_init: 0.00001
+  warmup_t: 3
+  cycle_limit: 1
+  t_in_epochs: true
+seed: 42
+epochs: 50
+examples_per_epoch: 500
+fp16: false
+# Application adaptation; published weights may already have seen L1W.
+pretrain: data/model_weights/model_weights_with_small_20241213.pth
+grad_norm_clip: 1.0
+save_frequency: 5
+validation_frequency: 1
+save_best: true

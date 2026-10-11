@@ -60,6 +60,7 @@ def train(config, epoch, model, optimizer, scheduler, scaler, train_loader, logg
         # backward
         scaler.scale(loss).backward()
         if config.grad_norm_clip:
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip, norm_type=2)
         scaler.step(optimizer)
         scaler.update()
@@ -103,7 +104,7 @@ def validate(config, epoch, model, val_loader, logger, writer):
     coords, instance_labels = torch.cat(coords, 0), torch.cat(instance_labels).cpu().numpy()
 
     # evaluate semantic and offset predictions
-    pointwise_eval(semantic_prediction_logits, offset_predictions, semantic_labels, offset_labels,
+    return pointwise_eval(semantic_prediction_logits, offset_predictions, semantic_labels, offset_labels,
                           config, epoch, writer, logger)
 
 
@@ -126,6 +127,7 @@ def pointwise_eval(semantic_prediction_logits, offset_predictions, semantic_labe
     logger.info(f'[VALIDATION] [{epoch}/{config.epochs}] val/semantic_acc {acc*100:.2f}, val/offset_loss {offset_loss.item():.3f}')
     writer.add_scalar(f'val/acc', acc if not np.isnan(acc) else 0, epoch)
     writer.add_scalar(f'val/Offset_MAE', offset_loss, epoch)
+    return float(offset_loss.item())
 
 
 def main():
@@ -153,6 +155,10 @@ def main():
         load_checkpoint(config.pretrain, logger, model)
 
     # train and val
+    best_offset_loss = float('inf')
+    best_path = osp.join(config.work_dir, 'best_offset.pth')
+    if args.resume and getattr(config, 'save_best', False) and osp.isfile(best_path):
+        best_offset_loss = torch.load(best_path, map_location='cpu')['val_offset_loss']
     logger.info('Training')
     for epoch in range(start_epoch, config.epochs + 1):
         train(config, epoch, model, optimizer, scheduler, scaler, train_loader, logger, writer)
@@ -160,7 +166,16 @@ def main():
             optimizer.zero_grad()
             logger.info('Validation')
             torch.cuda.empty_cache()
-            validate(config, epoch, model, val_loader, logger, writer)
+            val_offset_loss = validate(config, epoch, model, val_loader, logger, writer)
+            if getattr(config, 'save_best', False) and np.isfinite(val_offset_loss) and val_offset_loss < best_offset_loss:
+                best_offset_loss = val_offset_loss
+                torch.save({
+                    'net': {key: value.detach().cpu() for key, value in model.state_dict().items()},
+                    'optimizer': optimizer.state_dict(),
+                    'epoch': epoch,
+                    'val_offset_loss': val_offset_loss,
+                }, best_path)
+                logger.info(f'Saved best offset checkpoint: {best_path}, loss={val_offset_loss:.4f}')
         writer.flush()
 
 

@@ -1,4 +1,6 @@
 # Training
+For fine-tuning the modified model in this repository, see [当前仓库微调方案](finetuning.md). The guide below describes the original base-training workflow with SoftGroup initialization.
+
 Here we explain how to train your own networks for semantic and offset prediction using the automatically segmented point clouds introduced in the paper. Training the network on custom forest point clouds works analogously.
 
 *1\) Download training/validation point clouds and pretrained model weights*
