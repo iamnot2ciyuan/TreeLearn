@@ -42,6 +42,8 @@ If you want to train a custom model for forest segmentation, we refer to the [tr
 
 For adapting this modified model with pretrained TreeLearn weights, see the [Chinese fine-tuning guide](docs/finetuning.md), including dataset downloads, split provenance, preprocessing, and dedicated baseline/full configurations.
 
+For mid-scope fine-tuning of our trained RGB-gated epoch1000 model on FOR-instance plus LAUTx, see the [mid guide](docs/finetuning_mid.md) and [server Cursor prompt](docs/server_finetune_mid_prompt.md).
+
 ## Evaluation
 
 To evaluate the segmentation results of arbitrary methods on arbitrary benchmark datasets, we refer to the [evaluation guide](docs/evaluation.md)

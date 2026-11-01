@@ -1,5 +1,7 @@
 # 当前仓库的 TreeLearn 微调方案
 
+后续 **mid 数据范围（FOR-instance 全 split + LAUTx）** 实验请使用 [mid 专项指南](finetuning_mid.md) 和 [mid 服务器 prompt](server_finetune_mid_prompt.md)，初始化仍为我们自己的 epoch1000，RGB gate 和 boundary push 保留。
+
 核查日期：2026-10-12。依据原论文、官方数据说明，以及本仓库实际代码。文中的推荐配置是应用适配起点，尚未经过本项目 GPU 实验验证。
 
 ## 1. 先确定做哪一种微调

@@ -1,0 +1,6 @@
+default_args: ["configs/_modular/sample_generation.yaml"]
+sample_generation:
+  stride: 1 # fraction of 8 m inner edge; approximately 8 m spacing
+# Replace with the real NIBIO plot 16 filename, preserving its actual extension.
+# The parent structure must remain data/finetune_mid/val/forest/<filename>.
+forest_path: data/finetune_mid/val/forest/NIBIO_plot16.las
